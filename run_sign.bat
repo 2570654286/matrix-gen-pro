@@ -1,0 +1,11 @@
+@echo off
+chcp 65001 >nul
+echo 正在执行...
+
+:: 1. 设置密码 (你确认是 12345)
+set "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=12345"
+
+:: 2. 暴力签名 (直接把那一长串 Key 放在引号里，不读文件)
+call npx tauri signer sign --private-key "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5STFkNkpOa0xsbW42T3hIVHZBOVhnNDkwY2tHaHpld2dGSzhYT3lidzJac0FBQkFBQUFBQUFBQUFBQUlBQUFBQUQ1UWFkT1dFSVI1eEM5b05ZWjlWcVMvcXFVVmdITVhXbVk2TlFFVWo4Yjh5YUJNZG5BejFsVmQrT0JneGNyVVAwRFVZSG4welhPYTRHK0FYZ20wTmNVK2tReVdRV25PRWlBL1dGa2UzcVFDR3hJRjZrVDM2djJFRS81ZWtmclR1SlFLUlA2dEU1WVU9Cg==" setup.exe
+
+pause
