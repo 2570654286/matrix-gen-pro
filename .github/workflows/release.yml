@@ -1,6 +1,5 @@
-name: Release CI
+name: Release CI (Force Debug)
 
-# 触发机制：当你推送类似 "v0.1.0" 这样的 tag 时自动运行
 on:
   push:
     tags:
@@ -13,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest] # 如果以后要加 macos-latest，直接在这里加
+        platform: [windows-latest]
 
     runs-on: ${{ matrix.platform }}
 
@@ -31,20 +30,104 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: install frontend dependencies
-        # 如果你用 yarn 或 pnpm，请修改这里
         run: npm install
 
-      - name: Build and Create Release
-        uses: tauri-apps/tauri-action@v0
+      # ===================================================
+      # 第一关：直觉验证 (查看钥匙到底有没有传进来)
+      # ===================================================
+      - name: Check Secrets (Debug)
+        shell: pwsh
         env:
-          # 这些变量会自动从 GitHub Secrets 读取
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MY_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          MY_PWD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:MY_KEY)) { 
+            Write-Error "❌ 致命问题：GitHub Secrets 里没有读到 TAURI_PRIVATE_KEY！请检查变量名是否完全一致！" 
+            exit 1
+          } else {
+            Write-Host "✅ 私钥读取成功！长度: $($env:MY_KEY.Length)"
+            Write-Host "🔑 私钥前3位: $($env:MY_KEY.Substring(0,3))***"
+          }
+          
+          if ([string]::IsNullOrEmpty($env:MY_PWD)) { 
+             Write-Warning "⚠️ 警告：密码 (TAURI_KEY_PASSWORD) 为空！如果你的私钥有密码，签名将失败。"
+          } else {
+             Write-Host "✅ 密码读取成功！(已隐藏)"
+          }
+
+      # ===================================================
+      # 第二关：暴力构建 (完全复刻你的 BAT 逻辑)
+      # ===================================================
+      - name: Build and Sign (Raw Command)
+        # 这里不再使用 tauri-action，而是直接运行命令，不再有黑箱操作
+        run: npm run tauri build
+        env:
+          # 同时注入两套变量名，宁可多给，绝不少给
+          # 标准变量名
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # 你 BAT 里用的变量名 (为了保险，我们也传进去)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      # ===================================================
+      # 第三关：检查产物 (有没有 .sig 文件)
+      # ===================================================
+      - name: Verify Signature
+        shell: pwsh
+        run: |
+          $Sig = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi.zip.sig"
+          if ($Sig) { 
+             Write-Host "🎉 成功！找到了签名文件: $($Sig.Name)" 
+          } else {
+             Write-Error "💀 失败！依然没有生成签名文件。请查看上一步的构建日志。"
+             exit 1
+          }
+
+      # ===================================================
+      # 第四关：手动发布 (因为不用 tauri-action 了，我们自己上传)
+      # ===================================================
+      - name: Generate latest.json and Upload
+        shell: pwsh
+        if: success() # 只有上面成功了才执行
+        run: |
+          $Version = "${{ github.ref_name }}".Substring(1)
+          $SigPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi.zip.sig" | Select-Object -First 1
+          $ZipPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi.zip" | Select-Object -First 1
+          $MsiPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi" | Select-Object -First 1
+          $ExePath = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          
+          $Signature = Get-Content $SigPath
+          $ZipName = $ZipPath.Name
+          $DownloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$ZipName"
+
+          $JsonObj = @{
+            version = $Version
+            notes = "Auto update for ${{ github.ref_name }}"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $Signature
+                url = $DownloadUrl
+              }
+            }
+          }
+          $JsonObj | ConvertTo-Json -Depth 5 | Out-File "latest.json" -Encoding utf8
+          
+          # 输出文件路径供下一步上传使用
+          echo "UPLOAD_JSON=latest.json" >> $env:GITHUB_ENV
+          echo "UPLOAD_ZIP=$($ZipPath.FullName)" >> $env:GITHUB_ENV
+          echo "UPLOAD_MSI=$($MsiPath.FullName)" >> $env:GITHUB_ENV
+          echo "UPLOAD_EXE=$($ExePath.FullName)" >> $env:GITHUB_ENV
+
+      - name: Release to GitHub
+        uses: softprops/action-gh-release@v1
+        if: success()
         with:
-          # 这里会自动读取 tauri.conf.json 里的版本号
-          tagName: v__VERSION__ 
-          releaseName: 'App v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
-          prerelease: false
+          files: |
+            ${{ env.UPLOAD_JSON }}
+            ${{ env.UPLOAD_ZIP }}
+            ${{ env.UPLOAD_MSI }}
+            ${{ env.UPLOAD_EXE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
