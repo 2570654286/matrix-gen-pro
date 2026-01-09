@@ -35,7 +35,11 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "timestampUrl": ""
+    }
   },
   "plugins": {
     "shell": {
@@ -47,7 +51,7 @@
         "https://ghproxy.net/https://github.com/2570654286/matrix-gen-pro/releases/latest/download/latest.json"
       ],
       "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUxNDQyOUZERjQ2MzY4RTYKUldUbWFHUDAvU2xFNFJNUjRyaDBZQVdJMXNVbFI5d3lFR250d1hGc0pwdkJOZjZDb3JPQW8vTnkK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZFMjk0OURENzU4MjI4NDQKUldSRUtJSjEzVWtwYmhHWTBEN25mbXZRazFLQUl6N3krRGp1MTZnZSs3SzdGUWlNd2xSaTlXQmcK"
     }
   }
 }
