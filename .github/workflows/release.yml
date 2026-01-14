@@ -29,44 +29,28 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      # 👇 1. 纯命令行构建 + 内存注入密钥
+      # 👇👇👇 见证奇迹的时刻 👇👇👇
+      # 我们删除了所有的解码脚本、文件写入脚本
+      # 直接进行构建，因为 Tauri 会自动处理 Base64 字符串！
       - name: Build and Sign
         shell: powershell
         env:
-          # 密码照常传
+          # 直接把 GitHub 里的 Base64 字符串传进去
+          # Tauri 发现这不是文件路径，就会自动 Base64 解码它 -> 得到 key -> 成功！
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          # A. 从 Secrets 解码出临时文件 (为了处理 Base64 和格式)
-          $B64 = "${{ secrets.TAURI_PRIVATE_KEY }}"
-          if (-not $B64) { throw "Error: Secret TAURI_PRIVATE_KEY is missing." }
-          [System.IO.File]::WriteAllBytes("private.key", [System.Convert]::FromBase64String($B64))
-
-          # B. 【核弹步骤】直接读取文件内容到环境变量
-          # 不再传路径，直接传内容！-Raw 保证换行符不丢失
-          $KeyContent = Get-Content -Path "private.key" -Raw
-          
-          # C. 验证一下是否读到了 (打印前10个字符，安全)
-          Write-Host "密钥已加载到内存，开头检查: $($KeyContent.Substring(0, 10))..."
-          
-          # D. 设置环境变量 (仅对当前 Shell 有效，极其安全且无路径问题)
-          $env:TAURI_SIGNING_PRIVATE_KEY = $KeyContent
-          
-          # E. 开始构建
-          # 此时 Tauri 看到的是完整的密钥文本，而不是一个它找不到的文件路径
           npm run tauri build -- --target x86_64-pc-windows-msvc
 
-      # 2. 显式上传 (由于我们是手动构建，必须手动上传)
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: true
-          # 强制上传所有生成的文件
           files: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/latest.json
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
