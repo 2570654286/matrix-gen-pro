@@ -28,36 +28,29 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      # 👇👇👇 核心修复：Base64 解码器 👇👇👇
-      # 这一步会把你 Secrets 里的“一行 Base64”还原成“多行 Key 文件”
+      # 👇 1. 解码步骤 (保持不变，这步是对的)
       - name: Decode Signing Key
         shell: powershell
         run: |
           $EncodedKey = "${{ secrets.TAURI_PRIVATE_KEY }}"
-          
-          # 1. Check if key exists (Use English to avoid encoding errors)
-          if (-not $EncodedKey) { throw "Error: Secret TAURI_PRIVATE_KEY is missing or empty." }
-          
-          # 2. Try decoding
-          try {
-            [System.IO.File]::WriteAllBytes("$PWD/private.key", [System.Convert]::FromBase64String($EncodedKey))
-            Write-Host "Success: Private key decoded from Base64 to private.key"
-          } catch {
-            throw "Error: Decode failed! Please check if your Secret is a valid Base64 string."
-          }
-          
-          # 3. Set env vars
-          echo "TAURI_SIGNING_PRIVATE_KEY=$PWD/private.key" >> $env:GITHUB_ENV
-          echo "TAURI_PRIVATE_KEY=$PWD/private.key" >> $env:GITHUB_ENV
+          if (-not $EncodedKey) { throw "Error: Secret TAURI_PRIVATE_KEY is missing." }
+          # 解码并写入当前目录下的 private.key
+          [System.IO.File]::WriteAllBytes("private.key", [System.Convert]::FromBase64String($EncodedKey))
 
+      # 👇 2. 构建步骤 (关键修改)
       - name: Build and Upload Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 密码不需要解码，直接传
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          # ⚠️ 注意：Key 已经在上一步通过 $env:GITHUB_ENV 注入了，这里不需要再写 Key
+          
+          # 🔥🔥🔥 核心修改在这里 🔥🔥🔥
+          # 不再通过 $env:GITHUB_ENV 传递，直接告诉它文件就在这！
+          # 这样避开了 Windows 编码的所有 Bug
+          TAURI_SIGNING_PRIVATE_KEY: private.key
+          TAURI_PRIVATE_KEY: private.key
+          
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MatrixGen Pro ${{ github.ref_name }}'
