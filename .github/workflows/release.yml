@@ -34,18 +34,19 @@ jobs:
         shell: powershell
         run: |
           $EncodedKey = "${{ secrets.TAURI_PRIVATE_KEY }}"
-          if (-not $EncodedKey) { throw "❌ 错误：Secret 里没有 TAURI_PRIVATE_KEY" }
           
-          # 1. 尝试解码
+          # 1. Check if key exists (Use English to avoid encoding errors)
+          if (-not $EncodedKey) { throw "Error: Secret TAURI_PRIVATE_KEY is missing or empty." }
+          
+          # 2. Try decoding
           try {
             [System.IO.File]::WriteAllBytes("$PWD/private.key", [System.Convert]::FromBase64String($EncodedKey))
-            Write-Host "✅ 私钥已成功从 Base64 解码为文件 private.key"
+            Write-Host "Success: Private key decoded from Base64 to private.key"
           } catch {
-            throw "❌ 解码失败！请确认你的 Secret 是纯 Base64 字符串，没有多余空格或换行。"
+            throw "Error: Decode failed! Please check if your Secret is a valid Base64 string."
           }
           
-          # 2. 设置环境变量指向这个文件
-          # 必须使用绝对路径，且必须赋值给 TAURI_SIGNING_PRIVATE_KEY
+          # 3. Set env vars
           echo "TAURI_SIGNING_PRIVATE_KEY=$PWD/private.key" >> $env:GITHUB_ENV
           echo "TAURI_PRIVATE_KEY=$PWD/private.key" >> $env:GITHUB_ENV
 
