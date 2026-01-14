@@ -29,39 +29,44 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      # 1. 显式处理密钥 (我们已经验证过这是必须的)
-      - name: Decode Signing Key
-        shell: powershell
-        run: |
-          $EncodedKey = "${{ secrets.TAURI_PRIVATE_KEY }}"
-          if (-not $EncodedKey) { throw "Error: Secret TAURI_PRIVATE_KEY is missing." }
-          [System.IO.File]::WriteAllBytes("private.key", [System.Convert]::FromBase64String($EncodedKey))
-
-      # 2. 纯命令行构建 (不依赖任何插件，直接调用 Tauri CLI)
-      # 2. 纯命令行构建
+      # 👇 1. 纯命令行构建 + 内存注入密钥
       - name: Build and Sign
         shell: powershell
         env:
-          # 🔥🔥🔥 核心修复：使用绝对路径 🔥🔥🔥
-          # ${{ github.workspace }} 会自动替换成 D:\a\matrix-gen-pro\...
-          # 这样 Tauri 绝对能找到文件，绝不会再把文件名当成密钥了！
-          TAURI_SIGNING_PRIVATE_KEY: ${{ github.workspace }}\private.key
+          # 密码照常传
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
+          # A. 从 Secrets 解码出临时文件 (为了处理 Base64 和格式)
+          $B64 = "${{ secrets.TAURI_PRIVATE_KEY }}"
+          if (-not $B64) { throw "Error: Secret TAURI_PRIVATE_KEY is missing." }
+          [System.IO.File]::WriteAllBytes("private.key", [System.Convert]::FromBase64String($B64))
+
+          # B. 【核弹步骤】直接读取文件内容到环境变量
+          # 不再传路径，直接传内容！-Raw 保证换行符不丢失
+          $KeyContent = Get-Content -Path "private.key" -Raw
+          
+          # C. 验证一下是否读到了 (打印前10个字符，安全)
+          Write-Host "密钥已加载到内存，开头检查: $($KeyContent.Substring(0, 10))..."
+          
+          # D. 设置环境变量 (仅对当前 Shell 有效，极其安全且无路径问题)
+          $env:TAURI_SIGNING_PRIVATE_KEY = $KeyContent
+          
+          # E. 开始构建
+          # 此时 Tauri 看到的是完整的密钥文本，而不是一个它找不到的文件路径
           npm run tauri build -- --target x86_64-pc-windows-msvc
 
-      # 3. 显式上传 (使用 softprops/action-gh-release，这是 GitHub 官方推荐的发布动作)
+      # 2. 显式上传 (由于我们是手动构建，必须手动上传)
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: true
-          # 强制指定要上传的文件，不再靠猜
+          # 强制上传所有生成的文件
           files: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            # 👇 这里就是我们要验证的核心文件
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/latest.json
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
