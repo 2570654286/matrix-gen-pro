@@ -2,7 +2,7 @@
 on:
   push:
     tags:
-      - 'v*' # 当你推送 v0.1.9 这种标签时触发
+      - 'v*'
 
 jobs:
   publish-tauri:
@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest] # 我们只发 Windows 版
+        platform: [windows-latest]
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -28,43 +28,39 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      - name: 🕵️‍♂️ 侦探模式：检查配置和密钥
-        shell: bash
-        env:
-          MY_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      # 👇👇👇 核心修复：Base64 解码器 👇👇👇
+      # 这一步会把你 Secrets 里的“一行 Base64”还原成“多行 Key 文件”
+      - name: Decode Signing Key
+        shell: powershell
         run: |
-          echo "------ 开始检查 ------"
+          $EncodedKey = "${{ secrets.TAURI_PRIVATE_KEY }}"
+          if (-not $EncodedKey) { throw "❌ 错误：Secret 里没有 TAURI_PRIVATE_KEY" }
           
-          # 1. 检查私钥是否读取成功
-          if [ -z "$MY_KEY" ]; then
-            echo "❌ 致命错误：GitHub 根本没读到 TAURI_PRIVATE_KEY！请检查 Secrets 位置！"
-          else
-            echo "✅ 私钥读取成功 (长度: ${#MY_KEY})"
-          fi
+          # 1. 尝试解码
+          try {
+            [System.IO.File]::WriteAllBytes("$PWD/private.key", [System.Convert]::FromBase64String($EncodedKey))
+            Write-Host "✅ 私钥已成功从 Base64 解码为文件 private.key"
+          } catch {
+            throw "❌ 解码失败！请确认你的 Secret 是纯 Base64 字符串，没有多余空格或换行。"
+          }
           
-          # 2. 检查配置文件里有没有公钥
-          if grep -q "pubkey" src-tauri/tauri.conf.json; then
-             echo "✅ tauri.conf.json 里发现了 'pubkey' 字段"
-             grep "pubkey" src-tauri/tauri.conf.json
-          else
-             echo "❌ 致命错误：GitHub 上的 tauri.conf.json 里没有 'pubkey'！签名被跳过！"
-          fi
-          echo "------ 检查结束 ------"    
-        
+          # 2. 设置环境变量指向这个文件
+          # 必须使用绝对路径，且必须赋值给 TAURI_SIGNING_PRIVATE_KEY
+          echo "TAURI_SIGNING_PRIVATE_KEY=$PWD/private.key" >> $env:GITHUB_ENV
+          echo "TAURI_PRIVATE_KEY=$PWD/private.key" >> $env:GITHUB_ENV
+
       - name: Build and Upload Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 👇 关键修改：同时设置 V1 和 V2 两个变量名，确保万无一失
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          # 密码不需要解码，直接传
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # ⚠️ 注意：Key 已经在上一步通过 $env:GITHUB_ENV 注入了，这里不需要再写 Key
         with:
           tagName: ${{ github.ref_name }}
-          # ... 其他配置保持不变
           releaseName: 'MatrixGen Pro ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true # 为了安全，先生成草稿，你去后台点发布
+          releaseDraft: true
           prerelease: false
           args: --target x86_64-pc-windows-msvc
