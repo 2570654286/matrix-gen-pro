@@ -54,11 +54,15 @@ jobs:
       - name: Build and Upload Release
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动生成的，不用管
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 👇 关键修改：同时设置 V1 和 V2 两个变量名，确保万无一失
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
+          # ... 其他配置保持不变
           releaseName: 'MatrixGen Pro ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true # 为了安全，先生成草稿，你去后台点发布
