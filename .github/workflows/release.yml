@@ -1,4 +1,4 @@
-name: Release
+﻿name: Release
 on:
   push:
     tags:
@@ -28,6 +28,29 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
+      - name: 🕵️‍♂️ 侦探模式：检查配置和密钥
+        shell: bash
+        env:
+          MY_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+        run: |
+          echo "------ 开始检查 ------"
+          
+          # 1. 检查私钥是否读取成功
+          if [ -z "$MY_KEY" ]; then
+            echo "❌ 致命错误：GitHub 根本没读到 TAURI_PRIVATE_KEY！请检查 Secrets 位置！"
+          else
+            echo "✅ 私钥读取成功 (长度: ${#MY_KEY})"
+          fi
+          
+          # 2. 检查配置文件里有没有公钥
+          if grep -q "pubkey" src-tauri/tauri.conf.json; then
+             echo "✅ tauri.conf.json 里发现了 'pubkey' 字段"
+             grep "pubkey" src-tauri/tauri.conf.json
+          else
+             echo "❌ 致命错误：GitHub 上的 tauri.conf.json 里没有 'pubkey'！签名被跳过！"
+          fi
+          echo "------ 检查结束 ------"    
+        
       - name: Build and Upload Release
         uses: tauri-apps/tauri-action@v0
         env:
