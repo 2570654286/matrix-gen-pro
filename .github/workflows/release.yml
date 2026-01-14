@@ -1,9 +1,8 @@
-name: Manual Force Sign CI
-
+name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*' # 当你推送 v0.1.9 这种标签时触发
 
 jobs:
   publish-tauri:
@@ -12,10 +11,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest]
+        platform: [windows-latest] # 我们只发 Windows 版
 
     runs-on: ${{ matrix.platform }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -26,78 +24,20 @@ jobs:
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
-      - name: install frontend dependencies
+      - name: install dependencies (frontend)
         run: npm install
 
-      # 1. 构建 (这一步只负责生成 .msi/.exe，我们不指望它签名)
-      - name: Build
-        run: npm run tauri build
-
-      # 2. 【核心修正】既然它不生成文件，我们就手动算出来！
-      - name: Manually Generate Signature
-        shell: pwsh
+      - name: Build and Upload Release
+        uses: tauri-apps/tauri-action@v0
         env:
-          # 无论你 Secret 叫什么名字，这里都传进去
-          SIGN_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          SIGN_PWD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: |
-          # 找到生成的 MSI 文件
-          $MsiPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi" | Select-Object -First 1
-          
-          if (-not $MsiPath) { Write-Error "❌ 找不到 MSI 文件，构建可能失败了"; exit 1 }
-          
-          Write-Host "正在手动计算签名: $($MsiPath.FullName)"
-          
-          # 手动调用 tauri signer sign，这会强制生成一个 .sig 文件供我们读取
-          # 这就和你本地 BAT 的逻辑一模一样
-          npx tauri signer sign --private-key $env:SIGN_KEY --password $env:SIGN_PWD "$($MsiPath.FullName)"
-          
-          # 现在硬盘上一定有 .sig 了
-          $SigPath = "$($MsiPath.FullName).sig"
-          if (Test-Path $SigPath) {
-            Write-Host "✅ 签名计算成功！路径: $SigPath"
-          } else {
-            Write-Error "❌ 签名计算失败，请检查密码是否为 12345"
-            exit 1
-          }
-
-      # 3. 读取刚才算出来的签名，生成 latest.json
-      - name: Generate latest.json
-        shell: pwsh
-        run: |
-          $Version = "${{ github.ref_name }}".Substring(1)
-          # 读取刚才强制生成的 .sig
-          $SigPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi.sig" | Select-Object -First 1
-          $MsiPath = Get-ChildItem -Path "src-tauri/target/release/bundle/msi/*.msi" | Select-Object -First 1
-          
-          $Signature = Get-Content $SigPath
-          $DownloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($MsiPath.Name)"
-
-          $JsonObj = @{
-            version = $Version
-            notes = "Auto update for ${{ github.ref_name }}"
-            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            platforms = @{
-              "windows-x86_64" = @{
-                signature = $Signature
-                url = $DownloadUrl
-              }
-            }
-          }
-
-          $JsonObj | ConvertTo-Json -Depth 5 | Out-File "latest.json" -Encoding utf8
-          Write-Host "✅ latest.json 生成完毕"
-
-      # 4. 上传所有产物
-      - name: Release
-        uses: softprops/action-gh-release@v1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动生成的，不用管
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
-          files: |
-            latest.json
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'MatrixGen Pro ${{ github.ref_name }}'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: true # 为了安全，先生成草稿，你去后台点发布
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc
