@@ -29,28 +29,34 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      # 👇👇👇 见证奇迹的时刻 👇👇👇
-      # 我们删除了所有的解码脚本、文件写入脚本
-      # 直接进行构建，因为 Tauri 会自动处理 Base64 字符串！
+      # 1. 构建 (这一步会生成所有文件，包括 latest.json)
+      # 此时文件位于云端的 src-tauri/target/x86_64-pc-windows-msvc/release/bundle/...
       - name: Build and Sign
         shell: powershell
         env:
-          # 直接把 GitHub 里的 Base64 字符串传进去
-          # Tauri 发现这不是文件路径，就会自动 Base64 解码它 -> 得到 key -> 成功！
+          # 你的公钥在 tauri.conf.json 里 (Base64)
+          # 你的私钥在这里直接传入 (Base64) -> Tauri 自动识别解码
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           npm run tauri build -- --target x86_64-pc-windows-msvc
 
+      # 2. 显式上传 (使用 softprops/action-gh-release)
+      # 我们不再使用 tauri-action，而是手动指定要上传哪些文件
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: true
+          # 👇👇👇 暴力搜刮模式 👇👇👇
+          # ** 代表递归搜索所有子目录，不管藏在哪都能找到
           files: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/latest.json
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.sig
+            # 必须上传 zip (这是自动更新下载的包)
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.zip
+            # 必须上传 json (这是自动更新的菜单)
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
