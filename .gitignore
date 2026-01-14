@@ -36,3 +36,4 @@ dist-ssr
 node_modules
 dist
 release
+release_new_version.ps1
