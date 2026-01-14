@@ -5,7 +5,7 @@ on:
       - 'v*'
 
 jobs:
-  publish-tauri:
+  release:
     permissions:
       contents: write
     strategy:
@@ -15,46 +15,52 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: setup node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: 'lts/*'
 
-      - name: install Rust stable
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: install dependencies (frontend)
         run: npm install
 
-      # 👇 1. 解码步骤 (保持不变，这步是对的)
+      # 1. 显式处理密钥 (我们已经验证过这是必须的)
       - name: Decode Signing Key
         shell: powershell
         run: |
           $EncodedKey = "${{ secrets.TAURI_PRIVATE_KEY }}"
           if (-not $EncodedKey) { throw "Error: Secret TAURI_PRIVATE_KEY is missing." }
-          # 解码并写入当前目录下的 private.key
           [System.IO.File]::WriteAllBytes("private.key", [System.Convert]::FromBase64String($EncodedKey))
 
-      # 👇 2. 构建步骤 (关键修改)
-      - name: Build and Upload Release
-        uses: tauri-apps/tauri-action@v0
+      # 2. 纯命令行构建 (不依赖任何插件，直接调用 Tauri CLI)
+      - name: Build and Sign
+        shell: powershell
+        env:
+          # 显式指定密钥路径，杜绝环境变来编码问题
+          TAURI_SIGNING_PRIVATE_KEY: private.key
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          # 这一步会读取 tauri.conf.json 里的 createUpdaterArtifacts 配置
+          # 并在构建结束后，自动在输出目录生成 latest.json
+          npm run tauri build -- --target x86_64-pc-windows-msvc
+
+      # 3. 显式上传 (使用 softprops/action-gh-release，这是 GitHub 官方推荐的发布动作)
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          # 强制指定要上传的文件，不再靠猜
+          files: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            # 👇 这里就是我们要验证的核心文件
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/latest.json
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          
-          # 🔥🔥🔥 核心修改在这里 🔥🔥🔥
-          # 不再通过 $env:GITHUB_ENV 传递，直接告诉它文件就在这！
-          # 这样避开了 Windows 编码的所有 Bug
-          TAURI_SIGNING_PRIVATE_KEY: private.key
-          TAURI_PRIVATE_KEY: private.key
-          
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'MatrixGen Pro ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
-          prerelease: false
-          args: --target x86_64-pc-windows-msvc
