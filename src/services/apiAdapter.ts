@@ -15,6 +15,14 @@ export interface Response<T = any> {
 
 export const http = {
   request: async <T = any>(options: RequestOptions): Promise<T> => {
+    const startTime = Date.now();
+    console.log(`[API] ─────────────────────────────────────────────────────────────`);
+    console.log(`[API] Request: ${options.method} ${options.url}`);
+    console.log(`[API] Headers:`, JSON.stringify(options.headers, null, 2));
+    if (options.body) {
+      console.log(`[API] Body:`, JSON.stringify(options.body, null, 2));
+    }
+    
     try {
       // 调用 Rust 后端命令 'proxy_http_request'
       const response = await invoke<Response<T>>('proxy_http_request', {
@@ -22,18 +30,29 @@ export const http = {
           method: options.method,
           url: options.url,
           headers: options.headers || {},
-          body: options.body ? options.body : null, // Rust 接收 Option<Value>
+          body: options.body ? options.body : null,
           token: options.token
         }
       });
 
+      const duration = Date.now() - startTime;
+      console.log(`[API] Response (${response.status}) - ${duration}ms`);
+      console.log(`[API] Response Data:`, JSON.stringify(response.data, null, 2));
+      console.log(`[API] ─────────────────────────────────────────────────────────────\n`);
+
       if (response.status >= 200 && response.status < 1000) {
         return response.data;
       } else {
-        throw new Error(`API Error ${response.status}: ${JSON.stringify(response.data)}`);
+        const errorMsg = `API Error ${response.status}: ${JSON.stringify(response.data)}`;
+        console.error(`[API] Error: ${errorMsg}`);
+        throw new Error(errorMsg);
       }
     } catch (error) {
-      console.error('[Tauri API Error]', error);
+      const duration = Date.now() - startTime;
+      console.error(`[API] Request Failed (${duration}ms):`, error);
+      console.error(`[API] URL: ${options.url}`);
+      console.error(`[API] Method: ${options.method}`);
+      console.error(`[API] ─────────────────────────────────────────────────────────────\n`);
       throw error;
     }
   },
@@ -48,8 +67,6 @@ export const http = {
 export const shell = {
   open: async (path: string) => {
     try {
-      // 调用 Tauri Shell 插件的底层命令打开文件或文件夹
-      // 注意：这需要你的 Rust 后端启用了 plugin-shell
       await invoke('plugin:shell|open', { path });
     } catch (error) {
       console.error('[Shell] Failed to open path:', error);

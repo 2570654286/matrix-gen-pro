@@ -3,8 +3,8 @@ import { http } from './apiAdapter';
 
 export const GeeknowPlugin: ApiPlugin = {
   id: 'sora-veo-cloud',
-  name: 'Sora/Veo Cloud API',
-  description: 'Specialized adapter using System Proxy (Rust) to avoid CORS.',
+  name: 'GeekNow (Sora/Veo Cloud)',
+  description: '基于 System Proxy (Rust) 的 Sora 和 Veo 视频生成中转服务',
   
   getSupportedModels: (mediaType: MediaType) => {
     if (mediaType === MediaType.IMAGE) {
@@ -15,18 +15,17 @@ export const GeeknowPlugin: ApiPlugin = {
   },
 
   generate: async (payload: GenerationPayload, onProgress?: (p: number) => void): Promise<string> => {
+    // 确定使用哪个 API key 和 baseUrl
+    const activeApiKey = payload.apiKey;
+    
+    // GeekNow 固定使用 https://api.geeknow.top/v1
     const cleanBaseUrl = 'https://api.geeknow.top/v1';
 
     // --- Image Handler ---
     if (payload.mediaType === MediaType.IMAGE) {
         if (onProgress) onProgress(10);
         let url = `${cleanBaseUrl}/images/generations`;
-        if (!cleanBaseUrl.endsWith('/v1') && !url.includes('/v1/')) {
-            url = `${cleanBaseUrl}/v1/images/generations`;
-        } else if (cleanBaseUrl.endsWith('/v1')) {
-            url = `${cleanBaseUrl}/images/generations`;
-        }
-
+        
         const data = await http.post<{ data: { url: string }[] }>(
             url,
             {
@@ -36,8 +35,8 @@ export const GeeknowPlugin: ApiPlugin = {
                 size: "1024x1024",
                 response_format: "url"
             },
-            undefined, 
-            payload.apiKey 
+            { 'Content-Type': 'application/json' },
+            activeApiKey
         );
         
         if (onProgress) onProgress(100);
@@ -63,24 +62,26 @@ export const GeeknowPlugin: ApiPlugin = {
         seconds: seconds
     };
 
-    let submitUrl = `${cleanBaseUrl}/videos`;
-    if (!cleanBaseUrl.endsWith('/v1')) {
-        submitUrl = `${cleanBaseUrl}/v1/videos`;
-    }
-
+    // 提交视频生成任务
+    const submitUrl = `${cleanBaseUrl}/videos`;
+    
+    console.log('[GeeknowPlugin] Submitting video generation request:', submitUrl);
+    
     const submitData = await http.post<{ id: string }>(
         submitUrl,
         requestBody,
-        undefined,
-        payload.apiKey
+        { 'Content-Type': 'application/json' },
+        activeApiKey
     );
 
     const taskId = submitData.id;
     if (!taskId) throw new Error('API did not return a valid Task ID');
+    
+    console.log('[GeeknowPlugin] Task ID received:', taskId);
 
-    // Polling Logic
-    const POLLING_INTERVAL = 3000;
-    const MAX_ATTEMPTS = 600; // 增加到 30 分钟 (600 * 3秒)
+    // Polling Logic - 15分钟超时
+    const POLLING_INTERVAL = 5000; // 5秒轮询一次
+    const MAX_ATTEMPTS = 180; // 15 分钟 (180 * 5秒 = 900秒)
     let attempts = 0;
 
     while (attempts < MAX_ATTEMPTS) {
@@ -88,11 +89,8 @@ export const GeeknowPlugin: ApiPlugin = {
         attempts++;
 
         try {
-            let statusUrl = `${cleanBaseUrl}/videos/${taskId}`;
-            if (!cleanBaseUrl.endsWith('/v1')) {
-                statusUrl = `${cleanBaseUrl}/v1/videos/${taskId}`;
-            }
-
+            const statusUrl = `${cleanBaseUrl}/videos/${taskId}`;
+            
             const statusData = await http.request<{ 
                 status: string; 
                 progress?: number; 
@@ -102,30 +100,47 @@ export const GeeknowPlugin: ApiPlugin = {
             }>({
                 method: 'GET',
                 url: statusUrl,
-                token: payload.apiKey
+                headers: { 'Content-Type': 'application/json' },
+                token: activeApiKey
             });
             
-            const status = statusData.status; 
+            console.log(`[GeeknowPlugin] Status check ${attempts}:`, statusData);
+            
+            const status = statusData.status?.toLowerCase(); 
+            
+            // 更新进度
             if (statusData.progress !== undefined && onProgress) {
                 let p = Math.max(10, Math.min(99, Number(statusData.progress)));
                 onProgress(p);
             }
 
-            if (status === 'completed' || status === 'succeeded') {
+            // 检查完成状态（兼容多种状态值）
+            if (status === 'completed' || status === 'succeeded' || status === 'success') {
+                console.log('[GeeknowPlugin] Video generation completed');
                 if (onProgress) onProgress(100);
                 if (statusData.video_url) return statusData.video_url;
                 throw new Error('Task completed but missing video_url');
             }
 
-            if (status === 'failed') {
+            // 检查失败状态
+            if (status === 'failed' || status === 'error' || status === 'cancelled') {
                 const msg = statusData.error?.message || statusData.message || 'Unknown error';
                 throw new Error(`Cloud API Error: ${msg}`);
             }
 
+            // 处理排队中状态
+            if (status === 'pending' || status === 'queued' || status === 'processing') {
+                console.log(`[GeeknowPlugin] Task still ${status}, waiting...`);
+            }
+
         } catch (pollErr) {
              console.warn('Polling check failed:', pollErr);
+             // 如果是超时继续尝试
+             if (attempts >= MAX_ATTEMPTS) {
+                 throw new Error('Video generation timed out after 15 minutes');
+             }
         }
     }
-    throw new Error('Video generation timed out.');
+    throw new Error('Video generation timed out after 15 minutes of polling');
   }
 };

@@ -22,3 +22,17 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 必须包含！
+.env
+.env.production
+.env.local
+
+# Tauri 密钥 (虽然通常不在这里，但写上也无妨)
+*.pem
+*.key
+
+# 其他常规忽略
+node_modules
+dist
+release

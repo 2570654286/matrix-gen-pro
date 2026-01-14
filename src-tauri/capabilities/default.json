@@ -7,9 +7,11 @@
   ],
   "permissions": [
     "core:default",
-    "shell:allow-open",
-    "updater:default",
+    "core:path:default",
     "core:app:default",
-    "dialog:default"
+    "dialog:default",
+    "http:default",
+    "shell:allow-open",
+    "updater:default"
   ]
 }

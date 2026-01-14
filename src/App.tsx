@@ -6,6 +6,8 @@ import { JobCard } from './components/JobCard';
 import { SettingsIcon, PlayIcon, PauseIcon, TrashIcon, ImageIcon, VideoIcon, PlusIcon, XIcon, DownloadIcon, CheckIcon, AlertIcon, FolderIcon, ChatIcon, SearchIcon, CopyIcon, TerminalIcon, UserIcon } from './components/Icons';
 import { LogsPanel } from './components/LogsPanel';
 import { Sora2RolePanel } from './components/Sora2RolePanel';
+import VersionBadge from './VersionBadge';
+import { invoke } from '@tauri-apps/api/core';
 
 interface PromptItem {
   id: string;
@@ -681,12 +683,15 @@ const SettingsModal = ({
             {activeTab === 'video' && (videoUsesCustom ? '使用独立配置' : '继承全局配置')}
             {activeTab === 'llm' && (llmUsesCustom ? '使用独立配置' : '继承全局配置')}
           </div>
-          <button 
-            onClick={onClose} 
-            className="px-6 py-2 bg-primary hover:bg-primaryHover text-white font-semibold rounded-lg transition-colors text-sm"
-          >
-            完成
-          </button>
+          <div className="flex items-center gap-4">
+            <VersionBadge />
+            <button 
+              onClick={onClose} 
+              className="px-6 py-2 bg-primary hover:bg-primaryHover text-white font-semibold rounded-lg transition-colors text-sm"
+            >
+              完成
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -739,7 +744,24 @@ function App() {
   const [jobs, setJobs] = useState<Job[]>(() => {
       try {
           const saved = localStorage.getItem('MATRIX_JOBS');
-          return saved ? JSON.parse(saved) : [];
+          if (saved) {
+              const parsed = JSON.parse(saved);
+              // 清理过时的 PROCESSING 任务（超过15分钟的）
+              const now = Date.now();
+              const staleThreshold = 15 * 60 * 1000; // 15分钟
+              const cleaned = parsed.map((j: Job) => {
+                  if (j.status === JobStatus.PROCESSING) {
+                      const age = now - j.createdAt;
+                      if (age > staleThreshold) {
+                          // 超时的任务标记为失败
+                          return { ...j, status: JobStatus.FAILED, error: '生成超时 (15分钟)', progress: 0 };
+                      }
+                  }
+                  return j;
+              });
+              return cleaned;
+          }
+          return [];
       } catch {
           return [];
       }
@@ -817,29 +839,40 @@ function App() {
     localStorage.setItem('MATRIX_JOBS', JSON.stringify(jobsToSave));
   }, [jobs]);
 
-  // --- 3. Remote Update Check ---
+  // --- 3. Remote Update Check (使用 Tauri Updater 插件) ---
   useEffect(() => {
     const checkForUpdates = async () => {
-        try {
-            const response = await fetch(`./version.json?t=${Date.now()}`);
-            if (response.ok) {
-                const data = await response.json();
-                if (data.version && data.version !== APP_VERSION) {
-                    console.log(`Update found: ${data.version}`);
-                    setUpdateAvailable(data.version);
-                }
-            }
-        } catch (error) {
-            console.log('Update check skipped (local/offline)');
+      try {
+        console.log('[App] 检查更新中...');
+        const updateResult = await invoke<{ shouldUpdate: boolean; manifest?: { version: string; body: string; date: string } }>('check_for_updates');
+        
+        if (updateResult?.shouldUpdate && updateResult.manifest?.version) {
+          console.log(`[App] 发现新版本: ${updateResult.manifest.version}`);
+          setUpdateAvailable(updateResult.manifest.version);
         }
+      } catch (error) {
+        console.log('[App] 更新检查失败（这是正常的，如果尚未配置完整）:', error);
+      }
     };
+    
     checkForUpdates();
+    
+    // 每30分钟检查一次
     const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const handleUpdate = () => {
-      window.location.reload();
+  // --- 处理更新 ---
+  const handleUpdate = async () => {
+    try {
+      console.log('[App] 开始下载并安装更新...');
+      await invoke('install_update');
+      // 安装完成后自动重启
+      await invoke('relaunch_app');
+    } catch (error) {
+      console.error('[App] 更新安装失败:', error);
+      alert('更新安装失败，请手动下载新版本');
+    }
   };
 
   // --- Auto-Focus Logic ---
@@ -848,6 +881,33 @@ function App() {
       textareaRef.current.focus();
     }
   }, [activePromptId, settings.mediaType]);
+
+  // --- 定时清理超时任务 ---
+  useEffect(() => {
+    const checkStaleJobs = () => {
+      setJobs(prev => {
+        const now = Date.now();
+        const staleThreshold = 15 * 60 * 1000; // 15分钟
+        const needsUpdate = prev.some(j => 
+          j.status === JobStatus.PROCESSING && (now - j.createdAt) > staleThreshold
+        );
+        
+        if (!needsUpdate) return prev;
+        
+        return prev.map((j: Job) => {
+          if (j.status === JobStatus.PROCESSING && (now - j.createdAt) > staleThreshold) {
+            console.log(`[App] 任务 ${j.id} 超时，标记为失败`);
+            return { ...j, status: JobStatus.FAILED, error: '生成超时 (15分钟)', progress: 0 };
+          }
+          return j;
+        });
+      });
+    };
+    
+    // 每分钟检查一次
+    const interval = setInterval(checkStaleJobs, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // --- Keyboard Shortcuts ---
   useEffect(() => {
@@ -1196,6 +1256,8 @@ function App() {
         isOpen={showSora2Role} 
         onClose={() => setShowSora2Role(false)}
         apiKey={settings.apiKey}
+        providerId={settings.videoProviderId || settings.providerId}
+        mediaType={settings.mediaType}
       />
 
       {/* === Left Sidebar: Control Center === */}
