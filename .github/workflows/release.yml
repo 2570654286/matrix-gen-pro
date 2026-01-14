@@ -38,15 +38,16 @@ jobs:
           [System.IO.File]::WriteAllBytes("private.key", [System.Convert]::FromBase64String($EncodedKey))
 
       # 2. 纯命令行构建 (不依赖任何插件，直接调用 Tauri CLI)
+      # 2. 纯命令行构建
       - name: Build and Sign
         shell: powershell
         env:
-          # 显式指定密钥路径，杜绝环境变来编码问题
-          TAURI_SIGNING_PRIVATE_KEY: private.key
+          # 🔥🔥🔥 核心修复：使用绝对路径 🔥🔥🔥
+          # ${{ github.workspace }} 会自动替换成 D:\a\matrix-gen-pro\...
+          # 这样 Tauri 绝对能找到文件，绝不会再把文件名当成密钥了！
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.workspace }}\private.key
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          # 这一步会读取 tauri.conf.json 里的 createUpdaterArtifacts 配置
-          # 并在构建结束后，自动在输出目录生成 latest.json
           npm run tauri build -- --target x86_64-pc-windows-msvc
 
       # 3. 显式上传 (使用 softprops/action-gh-release，这是 GitHub 官方推荐的发布动作)
