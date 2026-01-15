@@ -8,6 +8,12 @@ import { LogsPanel } from './components/LogsPanel';
 import { Sora2RolePanel } from './components/Sora2RolePanel';
 import VersionBadge from './VersionBadge';
 import { invoke } from '@tauri-apps/api/core';
+// 👇 1. 引入必要的 Tauri 插件
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+
+// ... 你的其他 import 保持不变 ...
+
 
 interface PromptItem {
   id: string;
@@ -702,6 +708,35 @@ const SettingsModal = ({
 function App() {
   // --- 1. State with Persistence Initialization ---
   const [settings, setSettings] = useState<AppSettings>(() => {
+
+  useEffect(() => {
+    const initUpdater = async () => {
+      try {
+        // 开始检查更新
+        const update = await check();
+        
+        // 如果发现有更新
+        if (update?.available) {
+          console.log(`发现新版本: ${update.version}`);
+          
+          // 这里有两种选择：
+          // A. 如果你在 tauri.conf.json 里开了 "dialog": true，
+          //    那么只要调用 check()，Tauri 就会自动弹窗询问用户，你不需要写下面的代码。
+          
+          // B. 如果你想全自动静默更新（或者自定义 UI），则使用下面的代码：
+          await update.downloadAndInstall();
+          await relaunch(); 
+        } else {
+          console.log('当前已是最新版本');
+        }
+      } catch (error) {
+        console.error('更新检查失败:', error);
+      }
+    };
+
+    initUpdater();
+  }, []);  
+
     try {
         const saved = localStorage.getItem('MATRIX_SETTINGS');
         return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
