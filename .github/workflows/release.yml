@@ -29,34 +29,70 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      # 1. 构建 (这一步会生成所有文件，包括 latest.json)
-      # 此时文件位于云端的 src-tauri/target/x86_64-pc-windows-msvc/release/bundle/...
+      # 1. 构建与签名 (生成 .exe, .msi, .zip, .sig)
       - name: Build and Sign
         shell: powershell
         env:
-          # 你的公钥在 tauri.conf.json 里 (Base64)
-          # 你的私钥在这里直接传入 (Base64) -> Tauri 自动识别解码
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           npm run tauri build -- --target x86_64-pc-windows-msvc
 
-      # 2. 显式上传 (使用 softprops/action-gh-release)
-      # 我们不再使用 tauri-action，而是手动指定要上传哪些文件
+      # 👇👇👇 核心新增步骤：手动生成 latest.json 👇👇👇
+      - name: Generate latest.json
+        shell: powershell
+        run: |
+          # 1. 获取版本号和 Tag
+          $Tag = "${{ github.ref_name }}" # 例如 v0.1.24
+          $Version = $Tag.TrimStart('v')  # 例如 0.1.24
+          
+          # 2. 找到生成的 NSIS 更新包 (zip) 和签名文件 (sig)
+          $BundleDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+          $ZipFile = Get-ChildItem -Path $BundleDir -Filter "*.zip" | Select-Object -First 1
+          $SigFile = Get-ChildItem -Path $BundleDir -Filter "*.zip.sig" | Select-Object -First 1
+          
+          if (-not $ZipFile -or -not $SigFile) { Write-Error "找不到 zip 或 sig 文件！构建可能失败了。"; exit 1 }
+
+          # 3. 读取签名内容
+          $Signature = Get-Content $SigFile.FullName
+
+          # 4. 拼接下载链接 (GitHub Release 的标准链接格式)
+          # 格式: https://github.com/{用户}/{仓库}/releases/download/{Tag}/{文件名}
+          $DownloadUrl = "https://github.com/${{ github.repository }}/releases/download/$Tag/$($ZipFile.Name)"
+
+          # 5. 构造 JSON 内容
+          $JsonContent = @"
+          {
+            "version": "$Version",
+            "notes": "Update for version $Version",
+            "pub_date": "$(Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "$Signature",
+                "url": "$DownloadUrl"
+              }
+            }
+          }
+          "@
+
+          # 6. 写入 latest.json 到 bundle 目录
+          $JsonPath = Join-Path $BundleDir "latest.json"
+          $JsonContent | Out-File -FilePath $JsonPath -Encoding utf8
+          Write-Host "✅ 成功生成 latest.json: $JsonPath"
+          Write-Host "预览内容:"
+          Write-Host $JsonContent
+
+      # 3. 显式上传所有文件 (包括刚才手动生成的 json)
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           draft: true
-          # 👇👇👇 暴力搜刮模式 👇👇👇
-          # ** 代表递归搜索所有子目录，不管藏在哪都能找到
           files: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.sig
-            # 必须上传 zip (这是自动更新下载的包)
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.zip
-            # 必须上传 json (这是自动更新的菜单)
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
