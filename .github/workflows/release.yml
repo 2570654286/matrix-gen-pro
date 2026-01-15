@@ -29,7 +29,7 @@ jobs:
       - name: install dependencies (frontend)
         run: npm install
 
-      # 1. 构建与签名 (生成 .exe, .msi, .zip, .sig)
+      # 1. Build and Sign (Generate .exe, .msi, .zip, .sig)
       - name: Build and Sign
         shell: powershell
         env:
@@ -38,29 +38,29 @@ jobs:
         run: |
           npm run tauri build -- --target x86_64-pc-windows-msvc
 
-      # 👇👇👇 核心新增步骤：手动生成 latest.json 👇👇👇
+      # 2. Manually Generate latest.json (English Only Script)
       - name: Generate latest.json
         shell: powershell
         run: |
-          # 1. 获取版本号和 Tag
-          $Tag = "${{ github.ref_name }}" # 例如 v0.1.24
-          $Version = $Tag.TrimStart('v')  # 例如 0.1.24
+          # Get Version info
+          $Tag = "${{ github.ref_name }}"
+          $Version = $Tag.TrimStart('v')
           
-          # 2. 找到生成的 NSIS 更新包 (zip) 和签名文件 (sig)
+          # Find generated assets
           $BundleDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
           $ZipFile = Get-ChildItem -Path $BundleDir -Filter "*.zip" | Select-Object -First 1
           $SigFile = Get-ChildItem -Path $BundleDir -Filter "*.zip.sig" | Select-Object -First 1
           
-          if (-not $ZipFile -or -not $SigFile) { Write-Error "找不到 zip 或 sig 文件！构建可能失败了。"; exit 1 }
+          # Check if assets exist
+          if (-not $ZipFile -or -not $SigFile) { Write-Error "Error: Zip or Sig file not found! Build failed."; exit 1 }
 
-          # 3. 读取签名内容
+          # Read signature
           $Signature = Get-Content $SigFile.FullName
 
-          # 4. 拼接下载链接 (GitHub Release 的标准链接格式)
-          # 格式: https://github.com/{用户}/{仓库}/releases/download/{Tag}/{文件名}
+          # Construct download URL
           $DownloadUrl = "https://github.com/${{ github.repository }}/releases/download/$Tag/$($ZipFile.Name)"
 
-          # 5. 构造 JSON 内容
+          # Create JSON content
           $JsonContent = @"
           {
             "version": "$Version",
@@ -75,14 +75,14 @@ jobs:
           }
           "@
 
-          # 6. 写入 latest.json 到 bundle 目录
+          # Write to file
           $JsonPath = Join-Path $BundleDir "latest.json"
           $JsonContent | Out-File -FilePath $JsonPath -Encoding utf8
-          Write-Host "✅ 成功生成 latest.json: $JsonPath"
-          Write-Host "预览内容:"
+          Write-Host "Success: latest.json generated at $JsonPath"
+          Write-Host "Preview:"
           Write-Host $JsonContent
 
-      # 3. 显式上传所有文件 (包括刚才手动生成的 json)
+      # 3. Upload Assets
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
