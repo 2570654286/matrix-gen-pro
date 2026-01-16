@@ -28,10 +28,17 @@ jobs:
       - name: Run Tauri build
         uses: tauri-apps/tauri-action@v0
         env:
+          # 👇 必须加上这一行！这是 GitHub 自动生成的临时密钥，允许 Action 上传文件
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}         
-          # 注入 Supabase 配置到构建环境，确保生产应用无需用户配置即可使用
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
         with:
+          tagName: v__VERSION__ # 建议加上这行，强制让它使用 package.json 的版本号对应 Tag
+          releaseName: 'MatrixGen Pro v__VERSION__'
+          body: 'See the assets to download this version and install.'
+          draft: false
+          prerelease: false
           args: --verbose
