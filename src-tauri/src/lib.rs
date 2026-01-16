@@ -18,6 +18,7 @@ pub fn run() {
             commands::upload_file,
             // commands::upload_video_to_oss, // 已迁移到 Supabase Storage
             commands::write_temp_file_binary,
+            commands::write_output_file,
             commands::check_for_updates,
             commands::install_update,
             commands::relaunch_app,

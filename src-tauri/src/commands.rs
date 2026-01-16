@@ -399,22 +399,96 @@ pub async fn upload_file(options: UploadOptions) -> Result<UploadResponse, Strin
     })
 }
 
-// 写入临时文件（用于 ffmpeg.wasm 生成的视频）
+// 写入输出文件（用于视频和图像生成结果）
+#[derive(Debug, Deserialize)]
+pub struct WriteOutputFileOptions {
+    pub file_name: String,
+    pub data: String,
+    pub media_type: String, // "video" 或 "image"
+}
+
+#[command]
+pub async fn write_output_file(options: WriteOutputFileOptions) -> Result<String, String> {
+    let WriteOutputFileOptions { file_name, data, media_type } = options;
+
+    // 根据媒体类型确定输出目录
+    let output_dir_name = match media_type.as_str() {
+        "video" => "Video",
+        "image" => "Image",
+        _ => "Output",
+    };
+
+    // 使用当前目录作为基础
+    let current_dir = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            println!("[OutputFile] 获取当前目录失败: {}", e);
+            return Err(format!("获取当前目录失败: {}", e));
+        }
+    };
+
+    let output_dir = current_dir.join(output_dir_name);
+
+    // 确保目录存在
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        println!("[OutputFile] 创建目录失败: {}", e);
+        return Err(format!("无法创建输出目录: {}", e));
+    }
+
+    let file_path = output_dir.join(&file_name);
+    let file_path_str = file_path.to_string_lossy().to_string();
+
+    println!("[OutputFile] 准备写入文件: {}, 数据长度: {}", file_path_str, data.len());
+
+    // 解码 base64
+    let decoded_data = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
+        Ok(d) => d,
+        Err(e) => {
+            println!("[OutputFile] base64 解码失败: {}", e);
+            return Err(format!("base64 解码失败: {}", e));
+        }
+    };
+
+    println!("[OutputFile] 解码后数据长度: {}", decoded_data.len());
+
+    // 写入文件
+    if let Err(e) = std::fs::write(&file_path, &decoded_data) {
+        println!("[OutputFile] 写入文件失败: {}", e);
+        return Err(format!("无法写入文件: {}", e));
+    }
+
+    // 验证文件是否存在
+    if !file_path.exists() {
+        println!("[OutputFile] 文件写入后不存在: {}", file_path_str);
+        return Err("文件写入后不存在".to_string());
+    }
+
+    // 获取文件大小
+    let file_size = std::fs::metadata(&file_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    println!("[OutputFile] 输出文件创建成功: {}, 大小: {} bytes", file_path_str, file_size);
+
+    Ok(file_path_str)
+}
+
+// 保留旧的临时文件函数以保持兼容性
 #[command]
 pub async fn write_temp_file_binary(file_name: String, data: String) -> Result<String, String> {
     let cache_dir = std::env::temp_dir().join("matrix-gen");
-    
+
     // 确保目录存在
     if let Err(e) = std::fs::create_dir_all(&cache_dir) {
         println!("[TempFile] 创建目录失败: {}", e);
         return Err(format!("无法创建缓存目录: {}", e));
     }
-    
+
     let file_path = cache_dir.join(&file_name);
     let file_path_str = file_path.to_string_lossy().to_string();
-    
+
     println!("[TempFile] 准备写入文件: {}, 数据长度: {}", file_path_str, data.len());
-    
+
     // 解码 base64
     let decoded_data = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
         Ok(d) => d,
@@ -423,28 +497,28 @@ pub async fn write_temp_file_binary(file_name: String, data: String) -> Result<S
             return Err(format!("base64 解码失败: {}", e));
         }
     };
-    
+
     println!("[TempFile] 解码后数据长度: {}", decoded_data.len());
-    
+
     // 写入文件
     if let Err(e) = std::fs::write(&file_path, &decoded_data) {
         println!("[TempFile] 写入文件失败: {}", e);
         return Err(format!("无法写入文件: {}", e));
     }
-    
+
     // 验证文件是否存在
     if !file_path.exists() {
         println!("[TempFile] 文件写入后不存在: {}", file_path_str);
         return Err("文件写入后不存在".to_string());
     }
-    
+
     // 获取文件大小
     let file_size = std::fs::metadata(&file_path)
         .map(|m| m.len())
         .unwrap_or(0);
-    
+
     println!("[TempFile] 临时文件创建成功: {}, 大小: {} bytes", file_path_str, file_size);
-    
+
     Ok(file_path_str)
 }
 

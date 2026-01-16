@@ -7,10 +7,12 @@ import { SettingsIcon, PlayIcon, PauseIcon, TrashIcon, ImageIcon, VideoIcon, Plu
 import { LogsPanel } from './components/LogsPanel';
 import { Sora2RolePanel } from './components/Sora2RolePanel';
 import VersionBadge from './VersionBadge';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 // 👇 1. 引入必要的 Tauri 插件
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+
+import ReactPlayer from 'react-player';
 
 // ... 你的其他 import 保持不变 ...
 
@@ -24,8 +26,10 @@ interface PromptItem {
 const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const progressRafRef = useRef<number>(0);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
 
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent closing modal
@@ -39,23 +43,40 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
     }
   };
 
-  const handleTimeUpdate = () => {
+  const updateProgress = () => {
     if (videoRef.current) {
       const current = videoRef.current.currentTime;
       const total = videoRef.current.duration;
-      setProgress((current / total) * 100);
-      // Ensure duration is set if valid
       if (!isNaN(total) && total > 0) {
+        setProgress((current / total) * 100);
         setDuration(total);
       }
     }
   };
 
+  const handleTimeUpdate = () => {
+    // 使用 requestAnimationFrame 优化进度更新性能
+    if (progressRafRef.current) cancelAnimationFrame(progressRafRef.current);
+    progressRafRef.current = requestAnimationFrame(updateProgress);
+  };
+
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-        setDuration(videoRef.current.duration);
+      setDuration(videoRef.current.duration);
     }
-  }
+  };
+
+  const handleCanPlay = () => {
+    setIsLoading(false);
+  };
+
+  const handleWaiting = () => {
+    setIsLoading(true);
+  };
+
+  const handlePlaying = () => {
+    setIsLoading(false);
+  };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.stopPropagation();
@@ -69,8 +90,10 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
 
   // Helper to format seconds to MM:SS or just SS if short
   const formatTime = (seconds: number) => {
-      if (isNaN(seconds)) return "0s";
-      return Math.floor(seconds) + "s";
+    if (isNaN(seconds)) return "0s";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `${secs}s`;
   };
 
   return (
@@ -80,15 +103,27 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
         src={src}
         poster={poster}
         className="max-h-full max-w-full object-contain cursor-pointer"
+        preload="auto"  // 改为 auto 预加载
         onClick={togglePlay}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={() => setIsPlaying(false)}
-        loop
+        onCanPlay={handleCanPlay}
+        onWaiting={handleWaiting}
+        onPlaying={handlePlaying}
       />
-      
+
+      {/* Loading Indicator */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="bg-black/70 backdrop-blur-sm p-4 rounded-full border border-white/20">
+            <div className="w-6 h-6 border-2 border-white/30 border-t-white animate-spin"></div>
+          </div>
+        </div>
+      )}
+
       {/* Play/Pause Overlay (Center) */}
-      {!isPlaying && (
+      {!isPlaying && !isLoading && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="bg-black/50 backdrop-blur-sm p-4 rounded-full border border-white/20">
              <PlayIcon className="w-8 h-8 text-white fill-white" />
@@ -97,24 +132,24 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
       )}
 
       {/* Controls Bar (Bottom) */}
-      <div 
+      <div
         className="absolute bottom-4 left-4 right-4 bg-black/60 backdrop-blur-md rounded-lg px-4 py-2 flex items-center gap-3 border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
         onClick={(e) => e.stopPropagation()}
       >
         <button onClick={togglePlay} className="text-white hover:text-primary transition-colors">
           {isPlaying ? <PauseIcon className="w-5 h-5 fill-current" /> : <PlayIcon className="w-5 h-5 fill-current" />}
         </button>
-        
+
         {/* Scrubber */}
-        <input 
-          type="range" 
-          min="0" 
-          max="100" 
-          value={progress || 0} 
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={progress || 0}
           onChange={handleSeek}
           className="flex-1 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-primary"
         />
-        
+
         <span className="text-[10px] font-mono text-gray-300 min-w-[60px] text-right">
             {videoRef.current ? formatTime(videoRef.current.currentTime) : '0s'} / {formatTime(duration)}
         </span>
@@ -1013,6 +1048,32 @@ function App() {
     initUpdater();
   }, []);
 
+  // --- Video Download Helper ---
+  const downloadVideoLocally = async (url: string, jobId: string, mediaType: MediaType): Promise<string> => {
+    try {
+      console.log(`[Download] 开始下载${mediaType === MediaType.VIDEO ? '视频' : '图像'}: ${url}`);
+      const response = await fetch(url);
+      const buffer = await response.arrayBuffer();
+
+      // 转换为 base64
+      const base64Data = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      const fileName = `video_${jobId}.mp4`;
+
+      // 使用 Tauri 命令保存到输出目录
+      const localPath = await invoke<string>('write_output_file', {
+        fileName,
+        data: base64Data,
+        mediaType: mediaType === MediaType.VIDEO ? 'video' : 'image'
+      });
+
+      console.log(`[Download] ${mediaType === MediaType.VIDEO ? '视频' : '图像'}保存成功: ${localPath}`);
+      return localPath;
+    } catch (error) {
+      console.error('[Download] 下载失败:', error);
+      throw error;
+    }
+  };
+
   // --- Queue Processing Logic ---
   const processingRef = useRef(false);
 
@@ -1041,20 +1102,20 @@ function App() {
     try {
       // --- PLUGIN SYSTEM INTEGRATION ---
       const isVideo = settings.mediaType === MediaType.VIDEO;
-      
-      const activeProviderId = isVideo 
-        ? (settings.videoProviderId || settings.providerId) 
+
+      const activeProviderId = isVideo
+        ? (settings.videoProviderId || settings.providerId)
         : (settings.imageProviderId || settings.providerId);
-        
-      const activeApiKey = isVideo 
-        ? (settings.videoApiKey || settings.apiKey) 
+
+      const activeApiKey = isVideo
+        ? (settings.videoApiKey || settings.apiKey)
         : (settings.imageApiKey || settings.apiKey);
-        
+
       const activeModel = isVideo ? settings.videoModel : settings.imageModel;
 
       const plugin = PluginRegistry.get(activeProviderId);
 
-      const resultUrl = await plugin.generate(
+      const remoteUrl = await plugin.generate(
           {
             prompt: job.prompt,
             apiKey: activeApiKey,
@@ -1063,15 +1124,35 @@ function App() {
             aspectRatio: settings.aspectRatio,
             mediaType: settings.mediaType,
             videoDuration: settings.videoDuration
-          }, 
+          },
           // Progress Callback
           (percent) => {
-             setJobs(prev => prev.map(j => 
+             setJobs(prev => prev.map(j =>
                 j.id === job.id ? { ...j, progress: percent } : j
              ));
           }
       );
       // --------------------------------
+
+      let resultUrl = remoteUrl;
+      let localPath: string | null = null;
+
+      // 对于视频，下载到本地以改善播放体验
+      if (settings.mediaType === MediaType.VIDEO) {
+        try {
+          console.log(`[Job] 下载视频到本地缓存...`);
+          setJobs(prev => prev.map(j =>
+            j.id === job.id ? { ...j, progress: 95 } : j  // 显示下载进度
+          ));
+          localPath = await downloadVideoLocally(remoteUrl, job.id, settings.mediaType);
+          // 转换为前端可用的 URL
+          resultUrl = convertFileSrc(localPath);
+          console.log(`[Job] 本地缓存完成: ${resultUrl}`);
+        } catch (downloadError) {
+          console.warn('[Job] 本地下载失败，使用远程URL:', downloadError);
+          // 失败时仍使用远程URL
+        }
+      }
 
       const ext = settings.mediaType === MediaType.VIDEO ? 'mp4' : 'png';
       const prefix = settings.mediaType === MediaType.VIDEO ? 'Video' : 'Image';
@@ -1079,18 +1160,18 @@ function App() {
       const shortId = job.id.split('-')[1] || job.id.slice(0,6);
       const fileName = `${prefix}_${dateStr}_${shortId}.${ext}`;
 
-      setJobs(prev => prev.map(j => 
-        j.id === job.id 
-          ? { ...j, status: JobStatus.COMPLETED, resultUrl, fileName, progress: 100 } 
+      setJobs(prev => prev.map(j =>
+        j.id === job.id
+          ? { ...j, status: JobStatus.COMPLETED, resultUrl, fileName, progress: 100 }
           : j
       ));
     } catch (err) {
       console.error("Job Failed:", err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown API Error';
-      
-      setJobs(prev => prev.map(j => 
-        j.id === job.id 
-          ? { ...j, status: JobStatus.FAILED, error: errorMessage, progress: 0 } 
+
+      setJobs(prev => prev.map(j =>
+        j.id === job.id
+          ? { ...j, status: JobStatus.FAILED, error: errorMessage, progress: 0 }
           : j
       ));
     }
