@@ -2,6 +2,8 @@ import { MediaType, VideoDuration, ApiPlugin, GenerationPayload } from '../types
 import { http } from './apiAdapter';
 import { GrsaiPlugin } from './GrsaiPlugin';
 import { GeeknowPlugin } from './GeeknowPlugin';
+import { loadExternalPlugins } from './pluginLoader';
+import type { AIPlugin } from '../types/plugin';
 
 // --- 1. Default Plugin (Mock / Universal) ---
 const UniversalMockPlugin: ApiPlugin = {
@@ -78,18 +80,146 @@ const MyCustomPlugin: ApiPlugin = {
   }
 };
 
+// --- Convert AIPlugin to ApiPlugin ---
+function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
+  return {
+    id: aiPlugin.manifest.id,
+    name: aiPlugin.manifest.name,
+    description: aiPlugin.manifest.description,
+
+    getSupportedModels: (mediaType: MediaType) => {
+      // AIPlugin is primarily for video generation
+      if (mediaType === MediaType.VIDEO) {
+        return ['sora_2_0', 'sora_2_0_turbo', 'veo_3_1-fast', 'gen-2', 'gen-3-alpha', 'kling-1.0'];
+      }
+      return [];
+    },
+
+    generate: async (payload: GenerationPayload, onProgress?: (p: number) => void): Promise<string> => {
+      console.log(`[Plugin: ${aiPlugin.manifest.name}] Starting async generation...`);
+
+      // Step 1: Create initial request
+      const requestConfig = aiPlugin.createRequest(payload);
+      const requestBody = requestConfig.body ? JSON.stringify(requestConfig.body) : undefined;
+
+      // Step 2: Send initial request
+      const response = await http.request<any>({
+        method: requestConfig.method as any,
+        url: requestConfig.url,
+        headers: requestConfig.headers,
+        body: requestBody,
+      });
+
+      // Step 3: Parse task response
+      const taskInfo = aiPlugin.parseTaskResponse(response);
+      let taskId = taskInfo.taskId;
+      let status = taskInfo.status;
+
+      onProgress?.(10);
+
+      // Step 4: Poll for completion
+      const maxRetries = 60; // 5 minutes with 5s intervals
+      const pollInterval = 5000;
+      let attempts = 0;
+
+      while (status !== 'completed' && status !== 'success' && attempts < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        attempts++;
+
+        const statusRequest = aiPlugin.createStatusRequest(taskId, payload.apiKey || '');
+        const statusResponse = await http.request<any>({
+          method: statusRequest.method as any,
+          url: statusRequest.url,
+          headers: statusRequest.headers,
+          body: statusRequest.body ? JSON.stringify(statusRequest.body) : undefined,
+        });
+
+        const statusInfo = aiPlugin.parseVideoUrl(statusResponse);
+        status = statusInfo.status;
+
+        const progress = Math.min(90, 10 + (attempts / maxRetries) * 80);
+        onProgress?.(progress);
+
+        if (status === 'completed' || status === 'success') {
+          return statusInfo.videoUrl;
+        } else if (status === 'failed' || status === 'error') {
+          throw new Error('Video generation failed');
+        }
+      }
+
+      if (attempts >= maxRetries) {
+        throw new Error('Video generation timeout');
+      }
+
+      // This should not be reached, but just in case
+      throw new Error('Unexpected polling end');
+    }
+  };
+}
+
+// --- Load External Plugins ---
+let externalPluginsLoaded = false;
+let loadedPlugins: Record<string, ApiPlugin> = {};
+
+async function loadExternalPluginsIntoRegistry() {
+  if (externalPluginsLoaded) return;
+
+  try {
+    const externalAIPlugins = await loadExternalPlugins();
+    const convertedPlugins: Record<string, ApiPlugin> = {};
+
+    for (const aiPlugin of externalAIPlugins) {
+      const apiPlugin = aiPluginToApiPlugin(aiPlugin);
+      convertedPlugins[apiPlugin.id] = apiPlugin;
+    }
+
+    loadedPlugins = convertedPlugins;
+    externalPluginsLoaded = true;
+
+    console.log(`[PluginSystem] Loaded ${Object.keys(loadedPlugins).length} external plugins`);
+  } catch (error) {
+    console.error('[PluginSystem] Failed to load external plugins:', error);
+  }
+}
+
 // --- 4. Plugin Registry (注册表) ---
 // 您的插件必须添加到这里才能生效！
 const plugins: Record<string, ApiPlugin> = {
   [UniversalMockPlugin.id]: UniversalMockPlugin,
   [GeeknowPlugin.id]: GeeknowPlugin,
   [GrsaiPlugin.id]: GrsaiPlugin,
-  
+
   // === 在这里启用您的自定义插件 ===
-  [MyCustomPlugin.id]: MyCustomPlugin, 
+  [MyCustomPlugin.id]: MyCustomPlugin,
 };
 
+let externalPlugins: ApiPlugin[] = [];
+
 export const PluginRegistry = {
-  getAll: () => Object.values(plugins),
-  get: (id: string) => plugins[id] || UniversalMockPlugin,
+  getAll: () => [...Object.values(plugins), ...externalPlugins],
+  get: (id: string) => {
+    return externalPlugins.find(p => p.id === id) || plugins[id] || UniversalMockPlugin;
+  },
+  setExternalPlugins: (extPlugins: ApiPlugin[]) => {
+    externalPlugins = extPlugins;
+  },
 };
+
+// --- External Plugin Management ---
+export async function loadAndConvertExternalPlugins(): Promise<ApiPlugin[]> {
+  try {
+    const externalAIPlugins = await loadExternalPlugins();
+    const convertedPlugins: ApiPlugin[] = [];
+
+    for (const aiPlugin of externalAIPlugins) {
+      const apiPlugin = aiPluginToApiPlugin(aiPlugin);
+      convertedPlugins.push(apiPlugin);
+    }
+
+    console.log(`[PluginSystem] Loaded ${convertedPlugins.length} external plugins`);
+    return convertedPlugins;
+  } catch (error) {
+    console.error('[PluginSystem] Failed to load external plugins:', error);
+    return [];
+  }
+}

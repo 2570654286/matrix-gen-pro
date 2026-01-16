@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AppSettings, DEFAULT_SETTINGS, Job, JobStatus, MediaType, VideoDuration, APP_VERSION } from './types';
-import { PluginRegistry } from './services/pluginSystem';
+import { AppSettings, DEFAULT_SETTINGS, Job, JobStatus, MediaType, VideoDuration, APP_VERSION, ApiPlugin } from './types';
+import { PluginRegistry, loadAndConvertExternalPlugins } from './services/pluginSystem';
 import { shell } from './services/apiAdapter';
 import { JobCard } from './components/JobCard';
 import { SettingsIcon, PlayIcon, PauseIcon, TrashIcon, ImageIcon, VideoIcon, PlusIcon, XIcon, DownloadIcon, CheckIcon, AlertIcon, FolderIcon, ChatIcon, SearchIcon, CopyIcon, TerminalIcon, UserIcon } from './components/Icons';
@@ -159,20 +159,22 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
 };
 
 // --- Internal Component: Settings Modal ---
-const SettingsModal = ({ 
-  isOpen, 
-  onClose, 
-  settings, 
-  setSettings 
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
-  settings: AppSettings; 
-  setSettings: (s: AppSettings) => void 
+const SettingsModal = ({
+  isOpen,
+  onClose,
+  settings,
+  setSettings,
+  externalPlugins
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  settings: AppSettings;
+  setSettings: (s: AppSettings) => void;
+  externalPlugins: ApiPlugin[];
 }) => {
   const [activeTab, setActiveTab] = useState<'global' | 'image' | 'video' | 'llm'>('global');
-  const providers = PluginRegistry.getAll();
-  const currentProvider = PluginRegistry.get(settings.providerId);
+  const providers = [...PluginRegistry.getAll(), ...externalPlugins];
+  const currentProvider = providers.find(p => p.id === settings.providerId) || PluginRegistry.get(settings.providerId);
   
   // Filter providers by capability
   const imageProviders = providers.filter(p => p.getSupportedModels(MediaType.IMAGE).length > 0);
@@ -850,6 +852,9 @@ function App() {
   // Update System State
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
 
+  // External plugins
+  const [externalPlugins, setExternalPlugins] = useState<ApiPlugin[]>([]);
+
   // Simulation State for System Status
   const [latency, setLatency] = useState(45);
   const [cloudLoad, setCloudLoad] = useState(24);
@@ -900,10 +905,25 @@ function App() {
     };
     
     checkForUpdates();
-    
+
     // 每30分钟检查一次
     const interval = setInterval(checkForUpdates, 30 * 60 * 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  // --- Load External Plugins ---
+  useEffect(() => {
+    const loadPlugins = async () => {
+      try {
+        const plugins = await loadAndConvertExternalPlugins();
+        setExternalPlugins(plugins);
+        PluginRegistry.setExternalPlugins(plugins);
+      } catch (error) {
+        console.error('[App] Failed to load external plugins:', error);
+      }
+    };
+
+    loadPlugins();
   }, []);
 
   // --- 处理更新 ---
@@ -1348,11 +1368,12 @@ function App() {
   return (
     <div className="flex h-screen w-full bg-background text-gray-200 font-sans selection:bg-primary/30">
       
-      <SettingsModal 
-        isOpen={showSettings} 
-        onClose={() => setShowSettings(false)} 
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
         settings={settings}
         setSettings={setSettings}
+        externalPlugins={externalPlugins}
       />
 
       <LogsPanel 

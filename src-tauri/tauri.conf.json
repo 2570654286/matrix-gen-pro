@@ -39,7 +39,10 @@
                    "createUpdaterArtifacts":  "v1Compatible",
                    "windows":  {
                                    "certificateThumbprint":  null,
-                                   "timestampUrl":  ""
+                                   "timestampUrl":  "",
+                                   "nsis":  {
+                                               "installMode":  "currentUser"
+                                           }
                                }
                },
     "plugins":  {

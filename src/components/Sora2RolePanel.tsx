@@ -375,9 +375,9 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       return;
     }
 
-    // 检查 Supabase 是否配置
+    // 检查 Supabase 是否配置（生产环境中应该已预配置）
     if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_KEY) {
-      showMessage('error', '请先配置 Supabase 存储环境变量 (VITE_SUPABASE_URL 和 VITE_SUPABASE_KEY)');
+      showMessage('error', '存储服务配置错误，请联系技术支持或重新安装应用');
       return;
     }
 
@@ -497,17 +497,17 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
           </button>
         </div>
 
-        {/* Supabase 配置提示 */}
+        {/* Supabase 配置错误提示（仅在开发环境或配置错误时显示） */}
         {(!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_KEY) && (
-          <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-sm bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+          <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-sm bg-red-500/10 text-red-400 border border-red-500/20">
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-yellow-500/20 flex items-center justify-center">
+              <div className="w-4 h-4 rounded-full bg-red-500/20 flex items-center justify-center">
                 <span className="text-xs">⚠</span>
               </div>
-              <span className="font-medium">需要配置 Supabase 存储</span>
+              <span className="font-medium">存储服务配置错误</span>
             </div>
             <p className="mt-1 text-xs opacity-90">
-              请在项目根目录的 .env 文件中设置 VITE_SUPABASE_URL 和 VITE_SUPABASE_KEY 环境变量以启用角色创建功能。
+              无法连接到云存储服务。如需技术支持，请联系开发者或尝试重新安装应用。
             </p>
           </div>
         )}

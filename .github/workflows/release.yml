@@ -1,19 +1,15 @@
 ﻿name: Release
+
 on:
   push:
     tags:
       - 'v*'
 
 jobs:
-  release:
+  release-tauri:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [windows-latest]
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,73 +22,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: install dependencies (frontend)
+      - name: Install dependencies
         run: npm install
 
-      # 1. Build and Sign (Generate .exe, .msi, .zip, .sig)
-      - name: Build and Sign
-        shell: powershell
+      - name: Run Tauri build
+        uses: tauri-apps/tauri-action@v0
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: |
-          npm run tauri build -- --target x86_64-pc-windows-msvc
-
-      # 2. Manually Generate latest.json (English Only Script)
-      - name: Generate latest.json
-        shell: powershell
-        run: |
-          # Get Version info
-          $Tag = "${{ github.ref_name }}"
-          $Version = $Tag.TrimStart('v')
-          
-          # Find generated assets
-          $BundleDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
-          $ZipFile = Get-ChildItem -Path $BundleDir -Filter "*.zip" | Select-Object -First 1
-          $SigFile = Get-ChildItem -Path $BundleDir -Filter "*.zip.sig" | Select-Object -First 1
-          
-          # Check if assets exist
-          if (-not $ZipFile -or -not $SigFile) { Write-Error "Error: Zip or Sig file not found! Build failed."; exit 1 }
-
-          # Read signature
-          $Signature = Get-Content $SigFile.FullName
-
-          # Construct download URL
-          $DownloadUrl = "https://github.com/${{ github.repository }}/releases/download/$Tag/$($ZipFile.Name)"
-
-          # Create JSON content
-          $JsonContent = @"
-          {
-            "version": "$Version",
-            "notes": "Update for version $Version",
-            "pub_date": "$(Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")",
-            "platforms": {
-              "windows-x86_64": {
-                "signature": "$Signature",
-                "url": "$DownloadUrl"
-              }
-            }
-          }
-          "@
-
-          # Write to file
-          $JsonPath = Join-Path $BundleDir "latest.json"
-          $JsonContent | Out-File -FilePath $JsonPath -Encoding utf8
-          Write-Host "Success: latest.json generated at $JsonPath"
-          Write-Host "Preview:"
-          Write-Host $JsonContent
-
-      # 3. Upload Assets
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}         
+          # 注入 Supabase 配置到构建环境，确保生产应用无需用户配置即可使用
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
         with:
-          draft: true
-          files: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.sig
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.zip
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/latest.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          args: --verbose

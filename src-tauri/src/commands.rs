@@ -400,6 +400,8 @@ pub async fn upload_file(options: UploadOptions) -> Result<UploadResponse, Strin
 }
 
 // 写入输出文件（用于视频和图像生成结果）
+// 注意：由于配置为 currentUser 安装模式，应用安装在 C:\Users\Name\AppData\Local\Programs\MatrixGenPro\
+// std::env::current_exe() 将指向该路径，您可以安全地写入相对于此路径的文件
 #[derive(Debug, Deserialize)]
 pub struct WriteOutputFileOptions {
     pub file_name: String,
@@ -670,6 +672,44 @@ pub async fn save_character_image_from_base64(options: SaveCharacterImageFromBas
             })
         }
     }
+}
+
+// 加载外部插件文件
+#[command]
+pub async fn load_plugins_raw() -> Result<Vec<String>, String> {
+    // 获取可执行文件所在目录
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("无法获取可执行文件路径: {}", e))?;
+    let exe_dir = exe_path.parent()
+        .ok_or("无法获取可执行文件所在目录")?;
+
+    // 插件目录路径
+    let plugins_dir = exe_dir.join("plugins");
+
+    // 创建插件目录（如果不存在）
+    if !plugins_dir.exists() {
+        std::fs::create_dir_all(&plugins_dir)
+            .map_err(|e| format!("无法创建插件目录: {}", e))?;
+    }
+
+    // 读取插件目录中的所有 .js 文件
+    let mut plugin_contents = Vec::new();
+    let entries = std::fs::read_dir(&plugins_dir)
+        .map_err(|e| format!("无法读取插件目录: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取目录条目失败: {}", e))?;
+        let path = entry.path();
+
+        // 检查是否为 .js 文件
+        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("js") {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("读取插件文件 {} 失败: {}", path.display(), e))?;
+            plugin_contents.push(content);
+        }
+    }
+
+    Ok(plugin_contents)
 }
 
 // 阿里云 OSS 上传功能已迁移到 Supabase Storage，前端直接使用 Supabase SDK

@@ -9,7 +9,10 @@ let supabase: SupabaseClient | null = null;
 if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 } else {
-  console.warn('[Storage] Supabase 配置未找到，请检查环境变量 VITE_SUPABASE_URL 和 VITE_SUPABASE_KEY');
+  // 在生产环境中，这些变量应该已经通过 GitHub Actions 注入
+  // 如果缺失，抛出错误而不是提示用户（用户无法修复此问题）
+  console.error('[Storage] 严重错误：Supabase 配置缺失。这表明构建时未正确注入环境变量。');
+  throw new Error('应用程序配置错误：缺少云存储凭据。如需技术支持，请联系开发者。');
 }
 
 // 上传临时视频文件到 Supabase Storage
