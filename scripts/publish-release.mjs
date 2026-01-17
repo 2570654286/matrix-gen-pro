@@ -41,10 +41,10 @@ async function uploadToSupabase() {
   const fileName = `MatrixGen_v${version}.zip`;
   const fileContent = fs.readFileSync(filePath);
 
-  // 上传文件
+  // 上传文件 (使用现有的 JU-supabase bucket)
   const { error } = await supabase.storage
-    .from('release-files')
-    .upload(fileName, fileContent, { upsert: true });
+    .from('JU-supabase')
+    .upload(`releases/${fileName}`, fileContent, { upsert: true });
 
   if (error) {
     throw new Error(`Supabase upload failed: ${error.message}`);
@@ -52,8 +52,8 @@ async function uploadToSupabase() {
 
   // 获取公开 URL
   const { data } = supabase.storage
-    .from('release-files')
-    .getPublicUrl(fileName);
+    .from('JU-supabase')
+    .getPublicUrl(`releases/${fileName}`);
 
   if (!data.publicUrl) {
     throw new Error('Failed to get public URL from Supabase');
