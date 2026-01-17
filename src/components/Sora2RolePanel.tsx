@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { XIcon, VideoIcon, UploadIcon, CheckIcon, ImageIcon, PlusIcon } from './Icons';
 import { SoraCharacterService } from '../services/soraCharacter';
 import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import ffmpegService from '../services/ffmpegService';
 import { uploadTempVideo } from '../services/storage';
 import { MediaType } from '../types';
@@ -734,7 +733,7 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
                         />
                       ) : char.video_thumbnail_url ? (
                         <video
-                          src={char.video_thumbnail_url}
+                          src={convertFileSrc(char.video_thumbnail_url)}
                           className="w-full h-full object-cover"
                           preload="metadata"
                           muted
@@ -808,7 +807,7 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
                   />
                 ) : selectedCharacter.video_thumbnail_url ? (
                   <video
-                    src={selectedCharacter.video_thumbnail_url}
+                    src={convertFileSrc(selectedCharacter.video_thumbnail_url)}
                     className="max-w-full max-h-[70vh] rounded-lg"
                     controls
                     autoPlay

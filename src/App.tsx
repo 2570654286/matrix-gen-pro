@@ -1,18 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { AppSettings, DEFAULT_SETTINGS, Job, JobStatus, MediaType, VideoDuration, APP_VERSION, ApiPlugin } from './types';
 import { PluginRegistry, loadAndConvertExternalPlugins } from './services/pluginSystem';
 import { shell } from './services/apiAdapter';
 import { JobCard } from './components/JobCard';
 import { SettingsIcon, PlayIcon, PauseIcon, TrashIcon, ImageIcon, VideoIcon, PlusIcon, XIcon, DownloadIcon, CheckIcon, AlertIcon, FolderIcon, ChatIcon, SearchIcon, CopyIcon, TerminalIcon, UserIcon } from './components/Icons';
-import { LogsPanel } from './components/LogsPanel';
+import { toggleLogWindow } from './services/windowManager';
+import { open } from '@tauri-apps/plugin-shell';
+
 import { Sora2RolePanel } from './components/Sora2RolePanel';
 import VersionBadge from './VersionBadge';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 // 👇 1. 引入必要的 Tauri 插件
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { ask } from '@tauri-apps/plugin-dialog';
 
 import ReactPlayer from 'react-player';
+import { LogMonitorPage } from './pages/LogMonitorPage';
 
 // ... 你的其他 import 保持不变 ...
 
@@ -743,6 +748,13 @@ const SettingsModal = ({
 
 // --- Main App ---
 function App() {
+  const location = useLocation();
+
+  // If this is the log monitor window, render the log monitor page
+  if (location.pathname === '/log-monitor') {
+    return <LogMonitorPage />;
+  }
+
   // --- 1. State with Persistence Initialization ---
   const [settings, setSettings] = useState<AppSettings>(() => {
 
@@ -844,7 +856,7 @@ function App() {
       }
   });
   const [showSettings, setShowSettings] = useState(false);
-  const [showLogs, setShowLogs] = useState(false);
+  
   const [showSora2Role, setShowSora2Role] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [focusedJob, setFocusedJob] = useState<Job | null>(null);
@@ -977,19 +989,14 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (showLogs) setShowLogs(false);
-        else if (showSettings) setShowSettings(false);
+        if (showSettings) setShowSettings(false);
         else setFocusedJob(null);
       }
-      // Ctrl+L or Cmd+L to open logs
-      if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
-        e.preventDefault();
-        setShowLogs(true);
-      }
+
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showSettings, showLogs]);
+  }, [showSettings]);
 
   // --- Resize Handler (Optimized for Windows/Cross-platform) ---
   const handleResizeMouseDown = (e: React.MouseEvent) => {
@@ -1376,10 +1383,7 @@ function App() {
         externalPlugins={externalPlugins}
       />
 
-      <LogsPanel 
-        isOpen={showLogs} 
-        onClose={() => setShowLogs(false)} 
-      />
+
 
       <Sora2RolePanel 
         isOpen={showSora2Role} 
@@ -1406,14 +1410,15 @@ function App() {
             >
               <UserIcon className="w-4 h-4" />
             </button>
-            <button 
-              onClick={() => setShowLogs(true)}
+
+            <button
+              onClick={() => { toggleLogWindow(); }}
               className="text-gray-500 hover:text-white transition-colors p-1.5 hover:bg-white/10 rounded-md"
-              title="查看日志 (Ctrl+L)"
+              title="打开日志监视器窗口"
             >
               <TerminalIcon className="w-4 h-4" />
             </button>
-            <button 
+            <button
               onClick={() => setShowSettings(true)}
               className="text-gray-500 hover:text-white transition-colors p-1.5 hover:bg-white/10 rounded-md"
               title="设置 API 连接"
@@ -1706,7 +1711,7 @@ function App() {
             
             {/* Improved Resizer Handle */}
             <div 
-                className={`absolute bottom-0 left-0 right-0 h-3 -mb-1.5 bg-transparent hover:bg-primary/50 cursor-ns-resize z-50 transition-all group/resizer flex items-center justify-center ${(showSettings || showLogs || showSora2Role) ? 'opacity-0 pointer-events-none' : ''}`}
+                className={`absolute bottom-0 left-0 right-0 h-3 -mb-1.5 bg-transparent hover:bg-primary/50 cursor-ns-resize z-50 transition-all group/resizer flex items-center justify-center ${(showSettings || showSora2Role) ? 'opacity-0 pointer-events-none' : ''}`}
                 onMouseDown={handleResizeMouseDown}
             >
                 {/* Visual line */}

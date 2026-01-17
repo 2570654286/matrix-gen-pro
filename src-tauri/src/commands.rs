@@ -684,12 +684,32 @@ pub async fn load_plugins_raw() -> Result<Vec<String>, String> {
         .ok_or("无法获取可执行文件所在目录")?;
 
     // 插件目录路径
-    let plugins_dir = exe_dir.join("plugins");
+    let mut plugins_dir = exe_dir.join("plugins");
+
+    // 检查是否为开发模式（通过检查目录结构）
+    // exe_dir 在开发模式下是 src-tauri/target/debug
+    let is_dev_mode = exe_dir.parent().and_then(|p| p.parent()).map_or(false, |project_root| {
+        project_root.join("src-tauri").exists() && project_root.join("src").exists()
+    });
+
+    if is_dev_mode {
+        // 开发模式：优先检查项目根目录的 plugins 文件夹
+        let project_root = exe_dir.parent().and_then(|p| p.parent()).unwrap_or(exe_dir);
+        let dev_plugins_dir = project_root.join("plugins");
+
+        if dev_plugins_dir.exists() {
+            plugins_dir = dev_plugins_dir;
+            println!("[PluginLoader] 开发模式：使用项目根目录插件文件夹");
+        }
+    }
+
+    println!("[PluginLoader] 插件目录路径: {}", plugins_dir.display());
 
     // 创建插件目录（如果不存在）
     if !plugins_dir.exists() {
         std::fs::create_dir_all(&plugins_dir)
             .map_err(|e| format!("无法创建插件目录: {}", e))?;
+        println!("[PluginLoader] 创建了插件目录: {}", plugins_dir.display());
     }
 
     // 读取插件目录中的所有 .js 文件
@@ -703,13 +723,44 @@ pub async fn load_plugins_raw() -> Result<Vec<String>, String> {
 
         // 检查是否为 .js 文件
         if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("js") {
+            println!("[PluginLoader] 发现插件文件: {}", path.display());
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| format!("读取插件文件 {} 失败: {}", path.display(), e))?;
             plugin_contents.push(content);
         }
     }
 
+    println!("[PluginLoader] 共加载了 {} 个插件文件", plugin_contents.len());
     Ok(plugin_contents)
+}
+
+// 获取输出目录路径
+#[command]
+pub fn get_output_path() -> Result<String, String> {
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("获取当前目录失败: {}", e))?;
+
+    let output_path = current_dir.to_string_lossy().to_string();
+    Ok(output_path)
+}
+
+// 创建日志监视器窗口
+#[command]
+pub async fn create_log_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::webview::WebviewWindowBuilder;
+
+    let window = WebviewWindowBuilder::new(&app, "log-monitor", tauri::WebviewUrl::App("/log-monitor".into()))
+        .title("MatrixGen Pro - Console")
+        .inner_size(800.0, 600.0)
+        .resizable(true)
+        .always_on_top(false)
+        .position(100.0, 100.0)
+        .decorations(true)
+        .transparent(false)
+        .build()
+        .map_err(|e| format!("Failed to create log monitor window: {}", e))?;
+
+    Ok(())
 }
 
 // 阿里云 OSS 上传功能已迁移到 Supabase Storage，前端直接使用 Supabase SDK

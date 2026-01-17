@@ -1,12 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { XIcon, CopyIcon, SearchIcon } from './Icons';
+import { logger, type LogEntry } from '../services/logger';
 
-interface LogEntry {
-  id: string;
-  timestamp: string;
-  level: 'info' | 'warn' | 'error' | 'success';
-  message: string;
-}
+
 
 interface LogsPanelProps {
   isOpen: boolean;
@@ -20,27 +16,19 @@ export const LogsPanel: React.FC<LogsPanelProps> = ({ isOpen, onClose }) => {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // 模拟日志数据
+  // Subscribe to real-time logs
   useEffect(() => {
     if (!isOpen) return;
 
-    const mockLogs: LogEntry[] = [
-      { id: '1', timestamp: '2026-01-08 13:32:05', level: 'info', message: '[System] Application started successfully' },
-      { id: '2', timestamp: '2026-01-08 13:32:05', level: 'info', message: '[Plugin] Registered provider: Geeknow' },
-      { id: '3', timestamp: '2026-01-08 13:32:05', level: 'info', message: '[Plugin] Registered provider: Grsai' },
-      { id: '4', timestamp: '2026-01-08 13:32:10', level: 'success', message: '[API] Connection established (45ms)' },
-      { id: '5', timestamp: '2026-01-08 13:32:15', level: 'info', message: '[Job] Created new job: 1702031520000-abc123def' },
-      { id: '6', timestamp: '2026-01-08 13:32:16', level: 'info', message: '[Job] Job status changed: PENDING -> PROCESSING' },
-      { id: '7', timestamp: '2026-01-08 13:32:18', level: 'warn', message: '[Network] Rate limit approaching, consider reducing concurrency' },
-      { id: '8', timestamp: '2026-01-08 13:32:20', level: 'success', message: '[Job] Generation complete: Image_20260108_001.png' },
-      { id: '9', timestamp: '2026-01-08 13:32:25', level: 'info', message: '[Plugin] Loading sora_2_0 model...' },
-      { id: '10', timestamp: '2026-01-08 13:32:26', level: 'info', message: '[API] Request: POST /v1/video/generations' },
-      { id: '11', timestamp: '2026-01-08 13:32:45', level: 'error', message: '[API] Request failed: 429 Too Many Requests' },
-      { id: '12', timestamp: '2026-01-08 13:32:46', level: 'warn', message: '[Retry] Retrying request (attempt 2/3)...' },
-      { id: '13', timestamp: '2026-01-08 13:33:05', level: 'success', message: '[Job] Video generated successfully: Video_20260108_001.mp4' },
-    ];
+    // Set initial logs
+    setLogs(logger.getLogs());
 
-    setLogs(mockLogs);
+    // Subscribe to new logs
+    const unsubscribe = logger.subscribe((newLogs) => {
+      setLogs(newLogs);
+    });
+
+    return unsubscribe;
   }, [isOpen]);
 
   // 自动滚动到底部
@@ -165,8 +153,8 @@ export const LogsPanel: React.FC<LogsPanelProps> = ({ isOpen, onClose }) => {
               Auto-scroll
             </label>
             <span className="text-gray-700">|</span>
-            <button 
-              onClick={() => setLogs([])}
+            <button
+              onClick={() => logger.clear()}
               className="text-gray-500 hover:text-red-400 transition-colors"
             >
               Clear

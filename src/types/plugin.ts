@@ -1,28 +1,43 @@
+export interface AIPluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+}
+
+export interface RequestConfig {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: any;
+}
+
+export interface TaskResponse {
+  taskId: string;
+  status: string;
+}
+
+export interface VideoResult {
+  videoUrl: string;
+  status: string;
+}
+
 export interface AIPlugin {
-  manifest: {
-    id: string;
-    name: string;
-    version: string;
-    description: string;
-  };
-  createRequest(params: any): {
-    url: string;
-    method: string;
-    headers: Record<string, string>;
-    body?: any;
-  };
-  parseTaskResponse(response: any): {
-    taskId: string;
-    status: string;
-  };
-  createStatusRequest(taskId: string, apiKey: string): {
-    url: string;
-    method: string;
-    headers: Record<string, string>;
-    body?: any;
-  };
-  parseVideoUrl(response: any): {
-    videoUrl: string;
-    status: string;
-  };
+  manifest: AIPluginManifest;
+
+  createRequest(params: {
+    prompt: string;
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    aspectRatio?: string;
+    mediaType: string;
+    videoDuration?: string;
+  }): RequestConfig;
+
+  parseTaskResponse(response: any): TaskResponse;
+
+  createStatusRequest(taskId: string, apiKey?: string): RequestConfig;
+
+  parseVideoUrl(response: any): VideoResult;
 }

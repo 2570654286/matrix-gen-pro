@@ -26,7 +26,9 @@ pub fn run() {
             commands::start_file_server,
             commands::save_character_image,
             commands::save_character_image_from_base64,
-            commands::load_plugins_raw
+            commands::load_plugins_raw,
+            commands::create_log_monitor_window,
+            commands::get_output_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
