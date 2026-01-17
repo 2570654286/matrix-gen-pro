@@ -5,7 +5,7 @@ import { soundManager } from '../utils/soundManager';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import ffmpegService from '../services/ffmpegService';
-import { uploadTempVideo } from '../services/storage';
+import { StorageService } from '../services/StorageService';
 import { MediaType } from '../types';
 
 interface Character {
@@ -236,7 +236,7 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       const videoBlob = new Blob([videoData as any], { type: 'video/mp4' });
       const videoFile = new File([videoBlob], `temp_video_${Date.now()}.mp4`, { type: 'video/mp4' });
 
-      const videoUrl = await uploadTempVideo(videoFile);
+      const videoUrl = await StorageService.uploadFile(videoFile, 'videos');
 
       // 创建角色
       const response = await SoraCharacterService.createCharacter(
@@ -366,9 +366,18 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       return;
     }
 
-    // 检查 Supabase 是否配置（生产环境中应该已预配置）
-    if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_KEY) {
-      showMessage('error', '存储服务配置错误，请联系技术支持或重新安装应用');
+    // 检查存储服务是否配置
+    const storageProvider = import.meta.env.VITE_STORAGE_PROVIDER || 'supabase';
+    const supabaseConfigured = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_KEY;
+    const aliyunConfigured = import.meta.env.VITE_ALIYUN_OSS_BUCKET &&
+                            import.meta.env.VITE_ALIYUN_OSS_ACCESS_KEY_ID &&
+                            import.meta.env.VITE_ALIYUN_OSS_ACCESS_KEY_SECRET;
+
+    if (storageProvider === 'supabase' && !supabaseConfigured) {
+      showMessage('error', 'Supabase 存储服务配置错误，请联系技术支持或重新安装应用');
+      return;
+    } else if (storageProvider === 'aliyun' && !aliyunConfigured) {
+      showMessage('error', 'Aliyun OSS 存储服务配置错误，请联系技术支持或重新安装应用');
       return;
     }
 
@@ -477,20 +486,30 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
           </button>
         </div>
 
-        {/* Supabase 配置错误提示（仅在开发环境或配置错误时显示） */}
-        {(!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_KEY) && (
-          <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-sm bg-red-500/10 text-red-400 border border-red-500/20">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-red-500/20 flex items-center justify-center">
-                <span className="text-xs">⚠</span>
+        {/* 存储服务配置错误提示（仅在开发环境或配置错误时显示） */}
+        {(() => {
+          const storageProvider = import.meta.env.VITE_STORAGE_PROVIDER || 'supabase';
+          const supabaseConfigured = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_KEY;
+          const aliyunConfigured = import.meta.env.VITE_ALIYUN_OSS_BUCKET &&
+                                  import.meta.env.VITE_ALIYUN_OSS_ACCESS_KEY_ID &&
+                                  import.meta.env.VITE_ALIYUN_OSS_ACCESS_KEY_SECRET;
+
+          const isConfigured = storageProvider === 'supabase' ? supabaseConfigured : aliyunConfigured;
+
+          return !isConfigured ? (
+            <div className="mx-6 mt-4 px-4 py-3 rounded-lg text-sm bg-red-500/10 text-red-400 border border-red-500/20">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-full bg-red-500/20 flex items-center justify-center">
+                  <span className="text-xs">⚠</span>
+                </div>
+                <span className="font-medium">存储服务配置错误</span>
               </div>
-              <span className="font-medium">存储服务配置错误</span>
+              <p className="mt-1 text-xs opacity-90">
+                无法连接到云存储服务 ({storageProvider})。如需技术支持，请联系开发者或尝试重新安装应用。
+              </p>
             </div>
-            <p className="mt-1 text-xs opacity-90">
-              无法连接到云存储服务。如需技术支持，请联系开发者或尝试重新安装应用。
-            </p>
-          </div>
-        )}
+          ) : null;
+        })()}
 
         {message && (
           <div className={`mx-6 mt-4 px-4 py-2 rounded-lg text-sm ${
