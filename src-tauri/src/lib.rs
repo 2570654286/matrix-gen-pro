@@ -2,7 +2,76 @@
 mod commands;
 
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{State, Manager};
+use std::fs;
+use std::path::PathBuf;
+
+fn extract_default_plugin(app: &tauri::App) -> Result<(), String> {
+    // 1. Resolve source path (bundled resource or development path)
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    let exe_dir = exe_path.parent()
+        .ok_or("Failed to get executable directory")?;
+
+    // Check if in development mode (target/debug exists)
+    let is_dev_mode = exe_dir.parent().and_then(|p| p.parent()).map_or(false, |project_root| {
+        project_root.join("src-tauri").exists() && project_root.join("src").exists()
+    });
+
+    let resource_path = if is_dev_mode {
+        // Development mode: copy from source
+        let project_root = exe_dir.parent().and_then(|p| p.parent()).unwrap();
+        project_root.join("src-tauri").join("resources").join("default-provider.js")
+    } else {
+        // Production mode: resolve from bundled resources
+        app.path()
+            .resolve("resources/default-provider.js", tauri::path::BaseDirectory::Resource)
+            .map_err(|e| format!("Failed to resolve resource path: {}", e))?
+    };
+
+    // Also ensure the source file exists in dev mode
+    if is_dev_mode && !resource_path.exists() {
+        println!("[PluginExtract] Source file doesn't exist yet in dev mode, skipping copy");
+        return Ok(());
+    }
+
+    // 2. Resolve target path (user plugins folder)
+    let plugins_dir = if is_dev_mode {
+        // Development mode: use project root plugins folder
+        let project_root = exe_dir.parent().and_then(|p| p.parent()).unwrap();
+        project_root.join("plugins")
+    } else {
+        // Production mode: use executable directory plugins folder
+        exe_dir.join("plugins")
+    };
+
+    // Ensure plugins dir exists
+    if !plugins_dir.exists() {
+        fs::create_dir_all(&plugins_dir)
+            .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
+    }
+
+    let target_path = plugins_dir.join("default-provider.js");
+
+    // 3. Copy/Overwrite logic (always overwrite for official plugin)
+    println!("[PluginExtract] Copying from: {:?}", resource_path);
+    println!("[PluginExtract] Copying to: {:?}", target_path);
+
+    if resource_path.exists() {
+        fs::copy(&resource_path, &target_path)
+            .map_err(|e| format!("Failed to copy default plugin: {}", e))?;
+        println!("[PluginExtract] Default plugin extracted successfully");
+    } else {
+        println!("[PluginExtract] Source plugin file not found: {:?}", resource_path);
+        // Don't return error in dev mode if file doesn't exist yet
+        if !is_dev_mode {
+            return Err(format!("Plugin resource not found: {:?}", resource_path));
+        }
+    }
+
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,13 +105,23 @@ pub fn run() {
             commands::get_output_path,
             commands::show_in_folder,
             commands::check_generation_lock,
-            commands::release_generation_lock
+            commands::release_generation_lock,
+            commands::execute_powershell_command
         ])
-        .setup(|_app| {
+        .setup(|app| {
             // 在应用启动时清理临时文件
             if let Err(e) = crate::commands::cleanup_temp_files() {
                 println!("[Setup] Temp file cleanup failed: {}", e);
             }
+
+            // 自动提取默认插件到用户插件文件夹
+            println!("[Setup] Extracting default provider plugin...");
+            if let Err(e) = extract_default_plugin(app) {
+                println!("[Setup] Failed to extract default plugin: {}", e);
+            } else {
+                println!("[Setup] Default plugin extracted successfully");
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())

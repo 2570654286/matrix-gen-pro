@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::command;
+use tauri::{command, State, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use base64;
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
@@ -768,6 +768,17 @@ pub fn get_output_path() -> Result<String, String> {
 pub async fn create_log_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::webview::WebviewWindowBuilder;
 
+    // 检查窗口是否已经存在
+    if let Some(window) = app.get_webview_window("log-monitor") {
+        // 窗口已存在，确保显示并聚焦到前台
+        window.unminimize().map_err(|e| format!("Failed to unminimize log monitor window: {}", e))?;
+        window.show().map_err(|e| format!("Failed to show log monitor window: {}", e))?;
+        window.set_focus().map_err(|e| format!("Failed to focus log monitor window: {}", e))?;
+        println!("[LogMonitor] 窗口已存在，已显示到前台");
+        return Ok(());
+    }
+
+    // 窗口不存在，创建新窗口
     let window = WebviewWindowBuilder::new(&app, "log-monitor", tauri::WebviewUrl::App("/log-monitor".into()))
         .title("MatrixGen Pro - Console")
         .inner_size(800.0, 600.0)
@@ -779,6 +790,7 @@ pub async fn create_log_monitor_window(app: tauri::AppHandle) -> Result<(), Stri
         .build()
         .map_err(|e| format!("Failed to create log monitor window: {}", e))?;
 
+    println!("[LogMonitor] 创建了新的日志监视器窗口");
     Ok(())
 }
 
@@ -881,25 +893,37 @@ pub async fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// 检查并设置生成锁（防止并发生成）
-#[command]
-pub async fn check_generation_lock(generation_lock: tauri::State<'_, Mutex<bool>>) -> Result<bool, String> {
-    let mut lock = generation_lock.lock().map_err(|e| format!("Failed to acquire lock: {}", e))?;
 
-    if *lock {
-        // 已经有生成任务在进行中
-        Ok(false) // 返回 false 表示无法获取锁
-    } else {
-        // 获取锁，设置为 true
-        *lock = true;
-        Ok(true) // 返回 true 表示成功获取锁
-    }
+
+// 检查生成锁（允许并发生成）
+#[command]
+pub fn check_generation_lock(_state: State<'_, Mutex<bool>>) -> Result<bool, String> {
+    // 允许并发，总是返回 true
+    Ok(true)
 }
 
-// 释放生成锁
+// 释放生成锁（无操作，因为没有锁定）
 #[command]
-pub async fn release_generation_lock(generation_lock: tauri::State<'_, Mutex<bool>>) -> Result<(), String> {
-    let mut lock = generation_lock.lock().map_err(|e| format!("Failed to acquire lock: {}", e))?;
-    *lock = false;
+pub fn release_generation_lock(_state: State<'_, Mutex<bool>>) -> Result<(), String> {
+    // 无操作，允许并发
     Ok(())
+}
+
+// 执行 PowerShell 命令（用于声音通知）
+#[command]
+pub async fn execute_powershell_command(command: String) -> Result<(), String> {
+    use std::process::Command;
+
+    let output = Command::new("powershell")
+        .arg("-c")
+        .arg(&command)
+        .output()
+        .map_err(|e| format!("Failed to execute PowerShell command: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("PowerShell command failed: {}", stderr))
+    }
 } 

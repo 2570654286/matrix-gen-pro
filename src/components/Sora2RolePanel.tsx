@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { XIcon, VideoIcon, UploadIcon, CheckIcon, ImageIcon, PlusIcon } from './Icons';
 import { SoraCharacterService } from '../services/soraCharacter';
+import { soundManager } from '../utils/soundManager';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import ffmpegService from '../services/ffmpegService';
@@ -52,9 +53,7 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
   // 新增角色创建卡片的模态框
   const [showAddRoleCard, setShowAddRoleCard] = useState(false);
 
-  // 视频转换排队系统
-  const [isVideoConverting, setIsVideoConverting] = useState(false);
-  const [videoConvertQueue, setVideoConvertQueue] = useState<RoleCreationItem[]>([]);
+  // 并发视频转换（移除排队系统）
 
   const [characters, setCharacters] = useState<Character[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
@@ -121,15 +120,7 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
     }
   }, [isOpen, activeTab]);
 
-  // 监听队列变化，自动开始下一个转换
-  useEffect(() => {
-    if (!isVideoConverting && videoConvertQueue.length > 0) {
-      const nextItem = videoConvertQueue[0];
-      const remainingQueue = videoConvertQueue.slice(1);
-      setVideoConvertQueue(remainingQueue);
-      startVideoConversion(nextItem);
-    }
-  }, [isVideoConverting, videoConvertQueue]);
+  // 并发处理，无需队列监听
 
   if (!isOpen) return null;
 
@@ -281,6 +272,12 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
         const apiUsername = characterData.username;
         const displayName = item.roleName?.trim() || `@${apiUsername}`;
 
+        const saveLocalCharacterName = (characterId: string, name: string) => {
+          const savedNames = JSON.parse(localStorage.getItem('sora_character_names') || '{}');
+          savedNames[characterId] = name;
+          localStorage.setItem('sora_character_names', JSON.stringify(savedNames));
+        };
+
         saveLocalCharacterName(characterId, displayName);
 
         // 保存创建时的预览图片到本地文件
@@ -340,6 +337,7 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
 
         updateRoleItem(item.id, { status: 'completed', progressMessage: '创建成功' });
         showMessage('success', '角色创建成功！');
+        soundManager.playSuccess();
       } else {
         throw new Error('API响应中缺少角色信息');
       }
@@ -349,18 +347,12 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       updateRoleItem(item.id, { status: 'error', progressMessage: errorMessage });
       showMessage('error', `创建失败: ${errorMessage}`);
     } finally {
-      // 处理完一个后，重置转换状态
-      setIsVideoConverting(false);
+      // 并发处理，无需重置状态
     }
   };
 
 
-
-  // 开始视频转换
-  const startVideoConversion = (item: RoleCreationItem) => {
-    setIsVideoConverting(true);
-    processVideoConversionAndUpload(item);
-  };
+  // 并发处理，直接调用转换函数
 
   // 处理角色创建
   const handleCreateRole = async (item: RoleCreationItem) => {
@@ -380,23 +372,10 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       return;
     }
 
-    updateRoleItem(item.id, { status: 'uploading', progressMessage: '等待转换视频...' });
+    updateRoleItem(item.id, { status: 'uploading', progressMessage: '正在转换视频...' });
 
-    // 检查是否正在转换视频
-    if (isVideoConverting) {
-      // 加入队列
-      setVideoConvertQueue(prev => [...prev, item]);
-      updateRoleItem(item.id, { progressMessage: '排队等待转换视频...' });
-    } else {
-      // 直接开始转换
-      startVideoConversion(item);
-    }
-  };
-
-  const saveLocalCharacterName = (characterId: string, name: string) => {
-    const savedNames = JSON.parse(localStorage.getItem('sora_character_names') || '{}');
-    savedNames[characterId] = name;
-    localStorage.setItem('sora_character_names', JSON.stringify(savedNames));
+    // 并发处理，直接开始转换
+    processVideoConversionAndUpload(item);
   };
 
   const handleDeleteCharacter = async (id: string) => {
@@ -463,9 +442,11 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
             </div>
             角色创建
           </h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
-            <XIcon className="w-5 h-5 text-gray-400" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
+              <XIcon className="w-5 h-5 text-gray-400" />
+            </button>
+          </div>
         </div>
 
         <div className="flex border-b border-white/5 bg-[#0f0f0f] px-6 shrink-0">

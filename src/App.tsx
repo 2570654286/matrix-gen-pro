@@ -4,17 +4,20 @@ import { AppSettings, DEFAULT_SETTINGS, Job, JobStatus, MediaType, VideoDuration
 import { PluginRegistry, loadAndConvertExternalPlugins } from './services/pluginSystem';
 import { shell } from './services/apiAdapter';
 import { JobCard } from './components/JobCard';
-import { SettingsIcon, PlayIcon, PauseIcon, TrashIcon, ImageIcon, VideoIcon, PlusIcon, XIcon, DownloadIcon, CheckIcon, AlertIcon, FolderIcon, ChatIcon, SearchIcon, CopyIcon, TerminalIcon, UserIcon } from './components/Icons';
+import { SettingsIcon, PlayIcon, PauseIcon, TrashIcon, ImageIcon, VideoIcon, PlusIcon, XIcon, DownloadIcon, CheckIcon, AlertIcon, FolderIcon, ChatIcon, SearchIcon, CopyIcon, TerminalIcon, UserIcon, RefreshIcon } from './components/Icons';
 import { toggleLogWindow } from './services/windowManager';
 import { open } from '@tauri-apps/plugin-shell';
+import { soundService } from './services/soundService';
 
 import { Sora2RolePanel } from './components/Sora2RolePanel';
+import SoundToggle from './components/SoundToggle';
 import VersionBadge from './VersionBadge';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 // 👇 1. 引入必要的 Tauri 插件
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ask } from '@tauri-apps/plugin-dialog';
+import { clearAndReloadPlugins } from './services/pluginSystem';
 
 import ReactPlayer from 'react-player';
 import { LogMonitorPage } from './pages/LogMonitorPage';
@@ -169,13 +172,17 @@ const SettingsModal = ({
   onClose,
   settings,
   setSettings,
-  externalPlugins
+  externalPlugins,
+  isClearingPlugins,
+  handleClearPlugins
 }: {
   isOpen: boolean;
   onClose: () => void;
   settings: AppSettings;
   setSettings: (s: AppSettings) => void;
   externalPlugins: ApiPlugin[];
+  isClearingPlugins: boolean;
+  handleClearPlugins: () => void;
 }) => {
   const [activeTab, setActiveTab] = useState<'global' | 'image' | 'video' | 'llm'>('global');
   const providers = [...PluginRegistry.getAll(), ...externalPlugins];
@@ -216,9 +223,30 @@ const SettingsModal = ({
               <SettingsIcon className="w-5 h-5 text-primary" />
               API 配置
             </h2>
-            <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
-                <XIcon className="w-5 h-5 text-gray-400" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleClearPlugins}
+                disabled={isClearingPlugins}
+                className="px-3 py-1.5 text-xs bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 hover:text-orange-300 rounded-lg transition-all duration-200 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="重载插件"
+              >
+                {isClearingPlugins ? (
+                  <>
+                    <div className="w-3 h-3 rounded-full border border-orange-400/50 border-t-orange-400 animate-spin" />
+                    重载中...
+                  </>
+                ) : (
+                  <>
+                    <RefreshIcon className="w-3 h-3" />
+                    重载插件
+                  </>
+                )}
+              </button>
+              <SoundToggle />
+              <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
+                  <XIcon className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
         </div>
 
         {/* Tabs */}
@@ -868,6 +896,9 @@ function App() {
   // External plugins
   const [externalPlugins, setExternalPlugins] = useState<ApiPlugin[]>([]);
 
+  // Plugin clearing state
+  const [isClearingPlugins, setIsClearingPlugins] = useState(false);
+
   // Simulation State for System Status
   const [latency, setLatency] = useState(45);
   const [cloudLoad, setCloudLoad] = useState(24);
@@ -949,6 +980,22 @@ function App() {
     } catch (error) {
       console.error('[App] 更新安装失败:', error);
       alert('更新安装失败，请手动下载新版本');
+    }
+  };
+
+  // --- Handle clearing and reloading plugins ---
+  const handleClearPlugins = async () => {
+    if (isClearingPlugins) return;
+
+    setIsClearingPlugins(true);
+    try {
+      await clearAndReloadPlugins();
+      // Show success message or toast
+    } catch (error) {
+      console.error('Failed to clear and reload plugins:', error);
+      // Show error message or toast
+    } finally {
+      setIsClearingPlugins(false);
     }
   };
 
@@ -1103,28 +1150,20 @@ function App() {
   };
 
   // --- Queue Processing Logic ---
-  const processingRef = useRef(false);
-
   const processNextJob = useCallback(async () => {
-    if (processingRef.current) return;
-
     const pendingJobs = jobs.filter(j => j.status === JobStatus.PENDING);
     if (pendingJobs.length === 0) {
       setIsProcessing(false);
       return;
     }
 
-    const processingCount = jobs.filter(j => j.status === JobStatus.PROCESSING).length;
-    if (processingCount >= settings.concurrency) return;
+    // 并发处理：同时启动所有待处理任务，不限制并发数量
+    pendingJobs.forEach(job => {
+      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: JobStatus.PROCESSING, progress: 0 } : j));
+      processJob(job);
+    });
 
-    const jobToProcess = pendingJobs[0];
-
-    // Mark as processing immediately
-    setJobs(prev => prev.map(j => j.id === jobToProcess.id ? { ...j, status: JobStatus.PROCESSING, progress: 0 } : j));
-    
-    processJob(jobToProcess);
-
-  }, [jobs, settings.concurrency]);
+  }, [jobs]);
 
   const processJob = async (job: Job) => {
     try {
@@ -1193,6 +1232,9 @@ function App() {
           ? { ...j, status: JobStatus.COMPLETED, resultUrl, fileName, progress: 100 }
           : j
       ));
+
+      // Play success sound
+      soundService.playSuccess();
     } catch (err) {
       console.error("Job Failed:", err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown API Error';
@@ -1210,8 +1252,8 @@ function App() {
     if (activeJobs.length > 0) {
       setIsProcessing(true);
       setIsGenerating(true); // Any active jobs mean generation is happening
-      const interval = setInterval(processNextJob, 500);
-      return () => clearInterval(interval);
+      // 立即处理所有待处理任务
+      processNextJob();
     } else {
       setIsProcessing(false);
       setIsGenerating(false); // No active jobs, generation is complete
@@ -1279,9 +1321,7 @@ function App() {
 
   const handleSingleGenerate = (e: React.MouseEvent, text: string) => {
     e.stopPropagation();
-    if (!text.trim() || isGenerating) return;
-
-    setIsGenerating(true); // Prevent concurrent generation
+    if (!text.trim()) return;
 
     // Generate just 1 job for this specific prompt
     const newJob: Job = {
@@ -1299,9 +1339,7 @@ function App() {
     const mediaType = getCurrentMediaType();
     const currentPrompts = prompts[mediaType];
     const validPrompts = currentPrompts.filter((p: PromptItem) => p.text.trim() !== '');
-    if (validPrompts.length === 0 || isGenerating) return;
-
-    setIsGenerating(true); // Prevent concurrent generation
+    if (validPrompts.length === 0) return;
 
     const newJobs: Job[] = [];
 
@@ -1401,6 +1439,8 @@ function App() {
         settings={settings}
         setSettings={setSettings}
         externalPlugins={externalPlugins}
+        isClearingPlugins={isClearingPlugins}
+        handleClearPlugins={handleClearPlugins}
       />
 
 
@@ -1646,7 +1686,7 @@ function App() {
         <div className="p-6 pt-0 border-t-0 bg-[#080808] space-y-3">
           <button
             onClick={handleStartBatch}
-            disabled={validPromptCount === 0 || isGenerating}
+            disabled={validPromptCount === 0}
             className="w-full group relative flex items-center justify-center gap-2 bg-white text-black font-bold py-3.5 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-200 active:scale-95 transition-all overflow-hidden shadow-lg shadow-white/5"
           >
             {isGenerating && <div className="absolute bottom-0 left-0 h-1 bg-primary transition-all duration-300 w-full animate-pulse" />}
@@ -1654,28 +1694,7 @@ function App() {
             <span>{isGenerating ? "生成中..." : "启动批量生成"}</span>
           </button>
 
-          {isGenerating && (
-            <button
-              onClick={() => {
-                // For now, just show a message - full FFmpeg cancellation would require more complex implementation
-                if (window.confirm("确定要取消当前生成任务吗？")) {
-                  // Force reset the generation state
-                  setIsProcessing(false);
-                  setIsGenerating(false);
-                  // Cancel any pending jobs by marking them as failed
-                  setJobs(prev => prev.map(job =>
-                    job.status === JobStatus.PENDING || job.status === JobStatus.PROCESSING
-                      ? { ...job, status: JobStatus.FAILED, error: "用户取消" }
-                      : job
-                  ));
-                }
-              }}
-              className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-medium py-2.5 rounded-lg transition-colors"
-            >
-              <XIcon className="w-4 h-4" />
-              取消生成
-            </button>
-          )}
+
         </div>
       </aside>
 
@@ -1712,7 +1731,7 @@ function App() {
                             <div className="flex items-center gap-1">
                                 <button
                                     onClick={(e) => handleSingleGenerate(e, p.text)}
-                                    disabled={isGenerating}
+                                    disabled={false}
                                     className="p-1.5 rounded-md border border-white/5 bg-white/5 text-gray-400 hover:bg-primary hover:text-white hover:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={isGenerating ? "生成中，请等待..." : "单独生成 1 张"}
                                 >

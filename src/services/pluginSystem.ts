@@ -1,7 +1,6 @@
 import { MediaType, VideoDuration, ApiPlugin, GenerationPayload } from '../types';
 import { http } from './apiAdapter';
-import { GrsaiPlugin } from './GrsaiPlugin';
-import { GeeknowPlugin } from './GeeknowPlugin';
+
 import { loadExternalPlugins } from './pluginLoader';
 import type { AIPlugin } from '../types/plugin';
 
@@ -141,7 +140,7 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
         onProgress?.(progress);
 
         if (status === 'completed' || status === 'success') {
-          return statusInfo.videoUrl;
+          return statusInfo.url || '';
         } else if (status === 'failed' || status === 'error') {
           throw new Error('Video generation failed');
         }
@@ -184,10 +183,9 @@ async function loadExternalPluginsIntoRegistry() {
 
 // --- 4. Plugin Registry (注册表) ---
 // 您的插件必须添加到这里才能生效！
+// Note: All API provider plugins have been moved to external plugins in the plugins folder
 const plugins: Record<string, ApiPlugin> = {
   [UniversalMockPlugin.id]: UniversalMockPlugin,
-  [GeeknowPlugin.id]: GeeknowPlugin,
-  [GrsaiPlugin.id]: GrsaiPlugin,
 
   // === 在这里启用您的自定义插件 ===
   [MyCustomPlugin.id]: MyCustomPlugin,
@@ -220,6 +218,32 @@ export async function loadAndConvertExternalPlugins(): Promise<ApiPlugin[]> {
     return convertedPlugins;
   } catch (error) {
     console.error('[PluginSystem] Failed to load external plugins:', error);
+    return [];
+  }
+}
+
+// --- Clear and Reload Plugins ---
+export async function clearAndReloadPlugins(): Promise<ApiPlugin[]> {
+  try {
+    console.log('[PluginSystem] Clearing and reloading external plugins...');
+
+    // Clear the loaded plugins cache (if any)
+    externalPluginsLoaded = false;
+    loadedPlugins = {};
+
+    // Set external plugins to empty array temporarily
+    PluginRegistry.setExternalPlugins([]);
+
+    // Reload external plugins
+    const reloadedPlugins = await loadAndConvertExternalPlugins();
+
+    // Update the registry with reloaded plugins
+    PluginRegistry.setExternalPlugins(reloadedPlugins);
+
+    console.log(`[PluginSystem] Successfully reloaded ${reloadedPlugins.length} external plugins`);
+    return reloadedPlugins;
+  } catch (error) {
+    console.error('[PluginSystem] Failed to clear and reload plugins:', error);
     return [];
   }
 }

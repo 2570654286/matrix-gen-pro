@@ -33,12 +33,12 @@ export interface AppSettings {
   providerId: string; // The ID of the selected plugin (e.g., 'universal', 'runway-proxy', 'mj-proxy')
   apiKey: string;
   baseUrl: string;
-  
+
   // Model Config (Separated by media type)
   llmModel: string;
   imageModel: string;
   videoModel: string;
-  
+
   // Per-category Provider & Key
   llmProviderId?: string;
   llmApiKey?: string;
@@ -46,15 +46,18 @@ export interface AppSettings {
   imageApiKey?: string;
   videoProviderId?: string;
   videoApiKey?: string;
-  
+
   // Generation Params
   aspectRatio: string;
   mediaType: MediaType;
   videoDuration: VideoDuration; // New: 10s or 15s
-  
+
   // Queue Config
   batchSize: number;
   concurrency: number;
+
+  // Notification Settings
+  enableSoundNotifications: boolean; // Enable/disable sound notifications for job completion
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -64,19 +67,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
   llmModel: 'gpt-4o',
   imageModel: 'dall-e-3',
   videoModel: 'veo_3_1-fast', // Default to a model supported by the new plugin
-  
+
   llmProviderId: 'universal-mock',
   llmApiKey: '',
   imageProviderId: 'sora-veo-cloud',
   imageApiKey: '',
   videoProviderId: 'sora-veo-cloud',
   videoApiKey: '',
-  
+
   aspectRatio: '1920x1080', // Default to 16:9
   mediaType: MediaType.VIDEO, // Default to Video
   videoDuration: '15s', // Default to 15s
   batchSize: 2, // Default to 2
   concurrency: 20, // Default to 20
+
+  enableSoundNotifications: true, // Enable sound notifications by default
 };
 
 export interface GenerationPayload {

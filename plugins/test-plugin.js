@@ -47,8 +47,11 @@ var plugin = {
   parseVideoUrl: function(response) {
     // Mock video URL parsing
     return {
-      videoUrl: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
+      url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
       status: 'completed'
     };
   }
 };
+
+// Export the plugin
+plugin;
