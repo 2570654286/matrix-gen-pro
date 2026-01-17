@@ -859,6 +859,7 @@ function App() {
   
   const [showSora2Role, setShowSora2Role] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false); // Strict generation state for UI
   const [focusedJob, setFocusedJob] = useState<Job | null>(null);
 
   // Update System State
@@ -1208,10 +1209,12 @@ function App() {
     const activeJobs = jobs.filter(j => j.status === JobStatus.PENDING || j.status === JobStatus.PROCESSING);
     if (activeJobs.length > 0) {
       setIsProcessing(true);
+      setIsGenerating(true); // Any active jobs mean generation is happening
       const interval = setInterval(processNextJob, 500);
       return () => clearInterval(interval);
     } else {
       setIsProcessing(false);
+      setIsGenerating(false); // No active jobs, generation is complete
     }
   }, [jobs, processNextJob]);
 
@@ -1276,7 +1279,9 @@ function App() {
 
   const handleSingleGenerate = (e: React.MouseEvent, text: string) => {
     e.stopPropagation();
-    if (!text.trim()) return;
+    if (!text.trim() || isGenerating) return;
+
+    setIsGenerating(true); // Prevent concurrent generation
 
     // Generate just 1 job for this specific prompt
     const newJob: Job = {
@@ -1294,7 +1299,9 @@ function App() {
     const mediaType = getCurrentMediaType();
     const currentPrompts = prompts[mediaType];
     const validPrompts = currentPrompts.filter((p: PromptItem) => p.text.trim() !== '');
-    if (validPrompts.length === 0) return;
+    if (validPrompts.length === 0 || isGenerating) return;
+
+    setIsGenerating(true); // Prevent concurrent generation
 
     const newJobs: Job[] = [];
 
@@ -1335,9 +1342,22 @@ function App() {
 
   const handleOpenFolder = async () => {
       if (!focusedJob) return;
+
+      // 1. Log the click (Crucial for debugging)
+      console.log(`[UI] User clicked "Open Folder" for: ${focusedJob.fileName}`);
+
       const folder = settings.mediaType === MediaType.VIDEO ? 'Video' : 'Image';
       const path = `./${folder}/${focusedJob.fileName || 'file'}`;
-      await shell.open(path);
+
+      // 2. Use the Rust command to bypass shell scope restrictions
+      try {
+          await invoke('show_in_folder', { path });
+          console.log('[UI] Folder opened successfully');
+      } catch (error) {
+          console.error('[UI] Failed to open folder:', error);
+          // Optional: Show a toast to the user
+          alert(`无法打开文件夹: ${error}`);
+      }
   }
 
   // --- Helpers ---
@@ -1623,16 +1643,39 @@ function App() {
         </div>
 
         {/* Footer: Start Button */}
-        <div className="p-6 pt-0 border-t-0 bg-[#080808]">
+        <div className="p-6 pt-0 border-t-0 bg-[#080808] space-y-3">
           <button
             onClick={handleStartBatch}
-            disabled={validPromptCount === 0}
+            disabled={validPromptCount === 0 || isGenerating}
             className="w-full group relative flex items-center justify-center gap-2 bg-white text-black font-bold py-3.5 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-200 active:scale-95 transition-all overflow-hidden shadow-lg shadow-white/5"
           >
-            {isProcessing && <div className="absolute bottom-0 left-0 h-1 bg-green-500 transition-all duration-300 w-full animate-pulse" />}
+            {isGenerating && <div className="absolute bottom-0 left-0 h-1 bg-primary transition-all duration-300 w-full animate-pulse" />}
             <PlayIcon className="w-4 h-4 fill-current" />
-            <span>启动批量生成</span>
+            <span>{isGenerating ? "生成中..." : "启动批量生成"}</span>
           </button>
+
+          {isGenerating && (
+            <button
+              onClick={() => {
+                // For now, just show a message - full FFmpeg cancellation would require more complex implementation
+                if (window.confirm("确定要取消当前生成任务吗？")) {
+                  // Force reset the generation state
+                  setIsProcessing(false);
+                  setIsGenerating(false);
+                  // Cancel any pending jobs by marking them as failed
+                  setJobs(prev => prev.map(job =>
+                    job.status === JobStatus.PENDING || job.status === JobStatus.PROCESSING
+                      ? { ...job, status: JobStatus.FAILED, error: "用户取消" }
+                      : job
+                  ));
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-medium py-2.5 rounded-lg transition-colors"
+            >
+              <XIcon className="w-4 h-4" />
+              取消生成
+            </button>
+          )}
         </div>
       </aside>
 
@@ -1667,10 +1710,11 @@ function App() {
                             
                             {/* Actions Group - Always Visible */}
                             <div className="flex items-center gap-1">
-                                <button 
+                                <button
                                     onClick={(e) => handleSingleGenerate(e, p.text)}
-                                    className="p-1.5 rounded-md border border-white/5 bg-white/5 text-gray-400 hover:bg-primary hover:text-white hover:border-primary transition-all"
-                                    title="单独生成 1 张"
+                                    disabled={isGenerating}
+                                    className="p-1.5 rounded-md border border-white/5 bg-white/5 text-gray-400 hover:bg-primary hover:text-white hover:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={isGenerating ? "生成中，请等待..." : "单独生成 1 张"}
                                 >
                                     <PlayIcon className="w-3 h-3 fill-current" />
                                 </button>

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::command;
 use tauri_plugin_updater::UpdaterExt;
 use base64;
@@ -442,6 +443,9 @@ pub async fn write_output_file(options: WriteOutputFileOptions) -> Result<String
 
     println!("[OutputFile] 准备写入文件: {}, 数据长度: {}", file_path_str, data.len());
 
+    // Normalize the returned path for cross-platform compatibility
+    let normalized_path = file_path_str.replace('\\', "/");
+
     // 解码 base64
     let decoded_data = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
         Ok(d) => d,
@@ -472,13 +476,13 @@ pub async fn write_output_file(options: WriteOutputFileOptions) -> Result<String
 
     println!("[OutputFile] 输出文件创建成功: {}, 大小: {} bytes", file_path_str, file_size);
 
-    Ok(file_path_str)
+    Ok(normalized_path)
 }
 
 // 保留旧的临时文件函数以保持兼容性
 #[command]
 pub async fn write_temp_file_binary(file_name: String, data: String) -> Result<String, String> {
-    let cache_dir = std::env::temp_dir().join("matrix-gen");
+    let cache_dir = std::env::temp_dir().join("matrix-gen").join("temp");
 
     // 确保目录存在
     if let Err(e) = std::fs::create_dir_all(&cache_dir) {
@@ -688,19 +692,31 @@ pub async fn load_plugins_raw() -> Result<Vec<String>, String> {
 
     // 检查是否为开发模式（通过检查目录结构）
     // exe_dir 在开发模式下是 src-tauri/target/debug
-    let is_dev_mode = exe_dir.parent().and_then(|p| p.parent()).map_or(false, |project_root| {
-        project_root.join("src-tauri").exists() && project_root.join("src").exists()
+    let project_root = exe_dir.parent()  // src-tauri/target
+        .and_then(|p| p.parent())         // src-tauri
+        .and_then(|p| p.parent());        // project root
+
+    let is_dev_mode = project_root.map_or(false, |root| {
+        let has_src_tauri = root.join("src-tauri").exists();
+        let has_src = root.join("src").exists();
+        let has_plugins = root.join("plugins").exists();
+        println!("[PluginLoader] 检查开发模式: project_root={:?}, has_src_tauri={}, has_src={}, has_plugins={}", root, has_src_tauri, has_src, has_plugins);
+        has_src_tauri && has_src
     });
 
-    if is_dev_mode {
+    if is_dev_mode && project_root.is_some() {
         // 开发模式：优先检查项目根目录的 plugins 文件夹
-        let project_root = exe_dir.parent().and_then(|p| p.parent()).unwrap_or(exe_dir);
-        let dev_plugins_dir = project_root.join("plugins");
+        let dev_plugins_dir = project_root.unwrap().join("plugins");
+        println!("[PluginLoader] 开发模式检测到，使用项目根目录插件文件夹: {:?}", dev_plugins_dir);
 
         if dev_plugins_dir.exists() {
             plugins_dir = dev_plugins_dir;
             println!("[PluginLoader] 开发模式：使用项目根目录插件文件夹");
+        } else {
+            println!("[PluginLoader] 开发模式：项目根目录插件文件夹不存在: {:?}", dev_plugins_dir);
         }
+    } else {
+        println!("[PluginLoader] 非开发模式，使用默认插件目录: {:?}", plugins_dir);
     }
 
     println!("[PluginLoader] 插件目录路径: {}", plugins_dir.display());
@@ -740,7 +756,10 @@ pub fn get_output_path() -> Result<String, String> {
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("获取当前目录失败: {}", e))?;
 
-    let output_path = current_dir.to_string_lossy().to_string();
+    // Normalize path separators for cross-platform compatibility
+    let output_path = current_dir.to_string_lossy()
+        .to_string()
+        .replace('\\', "/");
     Ok(output_path)
 }
 
@@ -765,3 +784,122 @@ pub async fn create_log_monitor_window(app: tauri::AppHandle) -> Result<(), Stri
 
 // 阿里云 OSS 上传功能已迁移到 Supabase Storage，前端直接使用 Supabase SDK
 
+// 清理目录的辅助函数
+fn cleanup_directory(dir: &std::path::Path, deleted_count: &mut u64, total_size: &mut u64) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("Unable to read directory: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            // 递归清理子目录
+            cleanup_directory(&path, deleted_count, total_size)?;
+            // 删除空目录
+            if let Err(e) = std::fs::remove_dir(&path) {
+                println!("[Cleanup] Failed to remove directory {}: {}", path.display(), e);
+            } else {
+                *deleted_count += 1;
+            }
+        } else {
+            // 删除文件
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                *total_size += metadata.len();
+            }
+            if let Err(e) = std::fs::remove_file(&path) {
+                println!("[Cleanup] Failed to remove file {}: {}", path.display(), e);
+            } else {
+                *deleted_count += 1;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// 清理临时文件的函数
+pub fn cleanup_temp_files() -> Result<(), String> {
+    println!("[Cleanup] Starting temp file cleanup...");
+
+    // 获取临时目录
+    let temp_dir = std::env::temp_dir().join("matrix-gen");
+
+    // 如果临时目录不存在，直接返回
+    if !temp_dir.exists() {
+        println!("[Cleanup] Temp directory doesn't exist, skipping cleanup");
+        return Ok(());
+    }
+
+    let mut deleted_count = 0;
+    let mut total_size = 0u64;
+
+    // 清理主临时目录
+    cleanup_directory(&temp_dir, &mut deleted_count, &mut total_size)?;
+
+    // 清理专用 temp 子目录（如果存在）
+    let temp_subdir = temp_dir.join("temp");
+    if temp_subdir.exists() {
+        cleanup_directory(&temp_subdir, &mut deleted_count, &mut total_size)?;
+    }
+
+    println!("[Cleanup] Cleanup completed: removed {} items, total size {} bytes", deleted_count, total_size);
+    Ok(())
+}
+
+// 在文件管理器中打开文件夹并选中文件
+#[command]
+pub async fn show_in_folder(path: String) -> Result<(), String> {
+    // Log the attempt
+    println!("[Rust] Attempting to open path: {}", path);
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows trick: "explorer /select, path" opens the folder AND highlights the file
+        // If it's just a folder, just "explorer path"
+        let path_obj = std::path::Path::new(&path);
+        if path_obj.is_file() {
+            std::process::Command::new("explorer")
+                .args(["/select,", &path]) // Comma is important for /select
+                .spawn()
+                .map_err(|e| format!("Failed to open file in explorer: {}", e))?;
+        } else {
+            std::process::Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder in explorer: {}", e))?;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Fallback for Mac/Linux (just open it)
+        open::that(&path).map_err(|e| format!("Failed to open path: {}", e))?;
+    }
+
+    Ok(())
+}
+
+// 检查并设置生成锁（防止并发生成）
+#[command]
+pub async fn check_generation_lock(generation_lock: tauri::State<'_, Mutex<bool>>) -> Result<bool, String> {
+    let mut lock = generation_lock.lock().map_err(|e| format!("Failed to acquire lock: {}", e))?;
+
+    if *lock {
+        // 已经有生成任务在进行中
+        Ok(false) // 返回 false 表示无法获取锁
+    } else {
+        // 获取锁，设置为 true
+        *lock = true;
+        Ok(true) // 返回 true 表示成功获取锁
+    }
+}
+
+// 释放生成锁
+#[command]
+pub async fn release_generation_lock(generation_lock: tauri::State<'_, Mutex<bool>>) -> Result<(), String> {
+    let mut lock = generation_lock.lock().map_err(|e| format!("Failed to acquire lock: {}", e))?;
+    *lock = false;
+    Ok(())
+} 

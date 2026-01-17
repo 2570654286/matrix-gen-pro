@@ -1,17 +1,22 @@
 // 引入 commands 模块
 mod commands;
 
+use std::sync::Mutex;
+use tauri::State;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // HTTP 插件（用于网络请求）
         .plugin(tauri_plugin_http::init())
         // 自动更新插件
-        .plugin(tauri_plugin_updater::Builder::new().build()) 
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Shell 插件（用于打开链接）
         .plugin(tauri_plugin_shell::init())
         // 对话框插件（用于文件选择）
         .plugin(tauri_plugin_dialog::init())
+        // 管理状态（防止并发生成）
+        .manage(Mutex::new(false))  // generation_lock: Mutex<bool>
         // 注册所有命令
         .invoke_handler(tauri::generate_handler![
             commands::proxy_http_request,
@@ -28,8 +33,18 @@ pub fn run() {
             commands::save_character_image_from_base64,
             commands::load_plugins_raw,
             commands::create_log_monitor_window,
-            commands::get_output_path
+            commands::get_output_path,
+            commands::show_in_folder,
+            commands::check_generation_lock,
+            commands::release_generation_lock
         ])
+        .setup(|_app| {
+            // 在应用启动时清理临时文件
+            if let Err(e) = crate::commands::cleanup_temp_files() {
+                println!("[Setup] Temp file cleanup failed: {}", e);
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
