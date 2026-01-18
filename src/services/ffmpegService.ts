@@ -42,7 +42,7 @@ class FFmpegService {
   // 读取图片文件为 data URL（用于预览）
   async readImageAsDataUrl(imagePath: string): Promise<string> {
     const { invoke } = await import('@tauri-apps/api/core');
-    const base64Data: string = await invoke('read_file_base64', { path: imagePath });
+    const base64Data: string = await invoke('read_file_base64', { options: { path: imagePath } });
     
     // 根据文件扩展名确定 MIME 类型
     const ext = imagePath.split('.').pop()?.toLowerCase();
@@ -68,7 +68,7 @@ class FFmpegService {
     try {
       // 通过 Tauri 读取文件
       const { invoke } = await import('@tauri-apps/api/core');
-      const fileContent: string = await invoke('read_file_base64', { path: imagePath });
+      const fileContent: string = await invoke('read_file_base64', { options: { path: imagePath } });
       
       // 将 base64 转换为 Uint8Array
       const binaryData = Uint8Array.from(atob(fileContent), c => c.charCodeAt(0));

@@ -7,7 +7,7 @@ import type { AIPlugin } from '../types/plugin';
 // --- 1. Default Plugin (Mock / Universal) ---
 const UniversalMockPlugin: ApiPlugin = {
   id: 'universal-mock',
-  name: 'Universal / Mock Adapter',
+  name: 'Universal Mock Provider',
   description: 'Generic adapter for development or standard OpenAI-compatible endpoints.',
   
   getSupportedModels: (mediaType: MediaType) => {
@@ -45,7 +45,7 @@ const UniversalMockPlugin: ApiPlugin = {
 // --- 3. Custom Plugin Template (粘贴您的代码并修改这里) ---
 const MyCustomPlugin: ApiPlugin = {
   id: 'my-custom-plugin', // 确保这个ID是唯一的
-  name: '我的自定义 API',   // 这里是在下拉菜单中显示的名字
+  name: 'Custom API Provider',   // 这里是在下拉菜单中显示的名字
   description: '这是您自定义的中间件插件。',
   
   getSupportedModels: (mediaType: MediaType) => {
@@ -98,16 +98,28 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
       console.log(`[Plugin: ${aiPlugin.manifest.name}] Starting async generation...`);
 
       // Step 1: Create initial request
-      const requestConfig = aiPlugin.createRequest(payload);
-      const requestBody = requestConfig.body ? JSON.stringify(requestConfig.body) : undefined;
+      const requestConfig = aiPlugin.createRequest(payload) as any;
 
-      // Step 2: Send initial request
-      const response = await http.request<any>({
+      // Step 2: Prepare request options
+      const requestOptions: any = {
         method: requestConfig.method as any,
         url: requestConfig.url,
         headers: requestConfig.headers,
-        body: requestBody,
-      });
+      };
+
+      // Handle multipart/form-data if specified
+      if (requestConfig.useMultipart) {
+        requestOptions.body = requestConfig.body;
+        requestOptions.headers = {
+          ...requestOptions.headers,
+          'X-Use-Multipart': 'true'
+        };
+      } else {
+        requestOptions.body = requestConfig.body;
+      }
+
+      // Step 3: Send initial request
+      const response = await http.request<any>(requestOptions);
 
       // Step 3: Parse task response
       const taskInfo = aiPlugin.parseTaskResponse(response);
@@ -130,13 +142,16 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
           method: statusRequest.method as any,
           url: statusRequest.url,
           headers: statusRequest.headers,
-          body: statusRequest.body ? JSON.stringify(statusRequest.body) : undefined,
+          body: statusRequest.body,
         });
 
         const statusInfo = aiPlugin.parseVideoUrl(statusResponse);
         status = statusInfo.status;
 
-        const progress = Math.min(90, 10 + (attempts / maxRetries) * 80);
+        // Use API progress if available, otherwise fallback to calculated progress
+        const apiProgress = statusInfo.progress;
+        const calculatedProgress = Math.min(90, 10 + (attempts / maxRetries) * 80);
+        const progress = (typeof apiProgress === 'number') ? apiProgress : Math.round(calculatedProgress);
         onProgress?.(progress);
 
         if (status === 'completed' || status === 'success') {

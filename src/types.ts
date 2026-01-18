@@ -20,6 +20,7 @@ export interface Job {
   prompt: string;
   status: JobStatus;
   resultUrl?: string;
+  filePath?: string; // Absolute path to the file on disk
   fileName?: string;
   error?: string;
   createdAt: number;

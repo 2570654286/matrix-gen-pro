@@ -3,8 +3,8 @@
 
 var plugin = {
   manifest: {
-    id: 'test-plugin',
-    name: 'Test Plugin',
+    id: 'test-provider',
+    name: 'Test Provider',
     version: '1.0.0',
     description: 'A sample plugin for testing the MatrixGen plugin system'
   },
@@ -49,6 +49,44 @@ var plugin = {
     return {
       url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
       status: 'completed'
+    };
+  },
+
+  // Character Management Methods (Mock implementation for testing)
+  createCharacter: function(apiKey, videoUrl, timestamps = "0,3", fromTask) {
+    return {
+      url: 'https://httpbin.org/post',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey || 'test-key'}`
+      },
+      body: {
+        url: videoUrl,
+        timestamps: timestamps,
+        from_task: fromTask
+      }
+    };
+  },
+
+  getCharacterList: function(apiKey) {
+    return {
+      url: 'https://httpbin.org/get',
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey || 'test-key'}`
+      }
+    };
+  },
+
+  deleteCharacter: function(apiKey, characterId) {
+    return {
+      url: 'https://httpbin.org/delete',
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey || 'test-key'}`
+      }
     };
   }
 };

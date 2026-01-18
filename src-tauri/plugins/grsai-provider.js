@@ -4,7 +4,7 @@
 const plugin = {
   manifest: {
     id: "grsai-provider",
-    name: "Grsai (Sora/Veo/Nano)",
+    name: "Grsai Provider",
     version: "1.0.0",
     description: "支持 Sora-2, Veo3 和 Nano-Banana 模型的聚合接口"
   },
@@ -181,6 +181,19 @@ const plugin = {
       url: null,
       status: status || 'processing'
     };
+  },
+
+  // Character Management Methods (Grsai doesn't support character management yet)
+  createCharacter: function(apiKey, videoUrl, timestamps = "0,3", fromTask) {
+    throw new Error('Character management not supported by Grsai provider');
+  },
+
+  getCharacterList: function(apiKey) {
+    throw new Error('Character management not supported by Grsai provider');
+  },
+
+  deleteCharacter: function(apiKey, characterId) {
+    throw new Error('Character management not supported by Grsai provider');
   }
 };
 

@@ -26,6 +26,7 @@ export interface TaskResponse {
 export interface StatusResponse {
   url?: string;
   status: string;
+  progress?: number;
 }
 
 // Generation Parameters

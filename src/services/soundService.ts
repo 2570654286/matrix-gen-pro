@@ -9,6 +9,7 @@ export class SoundService {
   private audioContext: AudioContext | null = null;
   private isEnabled: boolean = true;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private lastPlayTime: number = 0;
 
   private constructor() {}
 
@@ -28,19 +29,23 @@ export class SoundService {
 
   /**
    * Debounced play function to prevent spam in multi-job completions
-   * Delays execution by 3 seconds, cancelling previous calls
+   * Prevents playing sounds within 3 seconds of the last play
    */
   private debouncedPlay(playFn: () => Promise<void>): void {
-    // Clear any existing timer
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
+    const now = Date.now();
+    const timeSinceLastPlay = now - this.lastPlayTime;
+
+    // If still within 3-second cooldown period, ignore this request
+    if (timeSinceLastPlay < 3000) {
+      console.log(`[SoundService] Sound request ignored (cooldown: ${3000 - timeSinceLastPlay}ms remaining)`);
+      return;
     }
 
-    // Set new timer for 3 seconds delay
-    this.debounceTimer = setTimeout(async () => {
-      await playFn();
-      this.debounceTimer = null;
-    }, 3000);
+    // Update last play time and play immediately
+    this.lastPlayTime = now;
+    playFn().catch(error => {
+      console.warn('[SoundService] Failed to play sound:', error);
+    });
   }
 
   /**

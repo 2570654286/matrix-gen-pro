@@ -18,6 +18,8 @@ import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { clearAndReloadPlugins } from './services/pluginSystem';
+import { getCurrentBeijingDateString } from './utils/timeUtils';
+import { FileService } from './services/FileService';
 
 import ReactPlayer from 'react-player';
 import { LogMonitorPage } from './pages/LogMonitorPage';
@@ -38,6 +40,10 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Seeking lock to prevent race condition between video onTimeUpdate and slider onChange
+  const isDragging = useRef(false);
+  const wasPlaying = useRef(false);
 
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent closing modal
@@ -63,9 +69,12 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
   };
 
   const handleTimeUpdate = () => {
-    // 使用 requestAnimationFrame 优化进度更新性能
-    if (progressRafRef.current) cancelAnimationFrame(progressRafRef.current);
-    progressRafRef.current = requestAnimationFrame(updateProgress);
+    // Only update slider if not dragging (prevent race condition)
+    if (!isDragging.current) {
+      // 使用 requestAnimationFrame 优化进度更新性能
+      if (progressRafRef.current) cancelAnimationFrame(progressRafRef.current);
+      progressRafRef.current = requestAnimationFrame(updateProgress);
+    }
   };
 
   const handleLoadedMetadata = () => {
@@ -94,6 +103,28 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
       videoRef.current.currentTime = newTime;
       setProgress(newProgress);
     }
+  };
+
+  // Handle pointer down on slider (start dragging)
+  const handlePointerDown = () => {
+    isDragging.current = true;
+    // Pause video if playing during seek (pause-seek-play pattern)
+    if (isPlaying) {
+      wasPlaying.current = true;
+      videoRef.current?.pause();
+    } else {
+      wasPlaying.current = false;
+    }
+  };
+
+  // Handle pointer up on slider (end dragging)
+  const handlePointerUp = () => {
+    isDragging.current = false;
+    // Resume playback if it was playing before (pause-seek-play pattern)
+    if (wasPlaying.current && videoRef.current) {
+      videoRef.current.play();
+    }
+    wasPlaying.current = false;
   };
 
   // Helper to format seconds to MM:SS or just SS if short
@@ -155,6 +186,8 @@ const VideoPlayer = ({ src, poster }: { src: string; poster?: string }) => {
           max="100"
           value={progress || 0}
           onChange={handleSeek}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
           className="flex-1 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-primary"
         />
 
@@ -185,7 +218,7 @@ const SettingsModal = ({
   handleClearPlugins: () => void;
 }) => {
   const [activeTab, setActiveTab] = useState<'global' | 'image' | 'video' | 'llm'>('global');
-  const providers = [...PluginRegistry.getAll(), ...externalPlugins];
+  const providers = PluginRegistry.getAll();
   const currentProvider = providers.find(p => p.id === settings.providerId) || PluginRegistry.get(settings.providerId);
   
   // Filter providers by capability
@@ -790,7 +823,12 @@ function App() {
 
     try {
         const saved = localStorage.getItem('MATRIX_SETTINGS');
-        return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            // Merge with defaults to ensure all fields are present, especially for new settings like videoModel
+            return { ...DEFAULT_SETTINGS, ...parsed };
+        }
+        return DEFAULT_SETTINGS;
     } catch {
         return DEFAULT_SETTINGS;
     }
@@ -889,9 +927,25 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false); // Strict generation state for UI
   const [focusedJob, setFocusedJob] = useState<Job | null>(null);
+  const [editingFileName, setEditingFileName] = useState<string>('');
 
   // Update System State
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+
+  // Initialize editing file name when focused job changes
+  useEffect(() => {
+    if (focusedJob?.fileName) {
+      // Extract base name (remove extension)
+      const lastDotIndex = focusedJob.fileName.lastIndexOf('.');
+      if (lastDotIndex > 0) {
+        setEditingFileName(focusedJob.fileName.substring(0, lastDotIndex));
+      } else {
+        setEditingFileName(focusedJob.fileName);
+      }
+    } else {
+      setEditingFileName('');
+    }
+  }, [focusedJob]);
 
   // External plugins
   const [externalPlugins, setExternalPlugins] = useState<ApiPlugin[]>([]);
@@ -1108,43 +1162,68 @@ function App() {
   useEffect(() => {
     const initUpdater = async () => {
       try {
-        const update = await check() as any;
-        if (update?.shouldUpdate) {
-          console.log(`发现新版本: ${update.manifest?.version}`);
+        const update = await check();
+        if (!update) {
+          console.log("当前已是最新版本");
+          return;
+        }
+
+        // 👇👇👇 加入这两行调试日志 👇👇👇
+        console.log("---------------- 更新调试 ----------------");
+        console.log("检测结果 (shouldUpdate):", update.available);
+        console.log("远程版本 (manifest.version):", update.version);
+        console.log("远程时间 (manifest.date):", update.date);
+        console.log("-----------------------------------------");
+
+        if (update.available) {
+          console.log(`发现新版本: ${update.version}`);
           await update.downloadAndInstall();
           await relaunch();
         } else {
-          console.log('当前已是最新版本');
+          console.log("当前已是最新版本"); // 👈 你现在的日志是从这打出来的
         }
       } catch (error) {
-        console.error('更新检查失败:', error);
+        console.error("检查失败:", error);
       }
     };
     initUpdater();
   }, []);
 
   // --- Video Download Helper ---
-  const downloadVideoLocally = async (url: string, jobId: string, mediaType: MediaType): Promise<string> => {
+  const downloadVideoLocally = async (url: string, jobId: string, mediaType: MediaType): Promise<string | undefined> => {
     try {
       console.log(`[Download] 开始下载${mediaType === MediaType.VIDEO ? '视频' : '图像'}: ${url}`);
-      const response = await fetch(url);
-      const buffer = await response.arrayBuffer();
 
-      // 转换为 base64
-      const base64Data = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      // 直接下载到临时文件
+      const tempFileName = `temp_${jobId}_${Date.now()}.mp4`;
+      const tempPath = await invoke<string>('download_file', { url, fileName: tempFileName });
+
+      // 读取临时文件为base64
+      const base64Data = await invoke<string>('read_file_base64', { options: { path: tempPath } });
+
+      // 清理临时文件
+      // Note: In production, you might want to keep temp files for debugging
+
       const fileName = `video_${jobId}.mp4`;
 
       // 使用 Tauri 命令保存到输出目录
       const localPath = await invoke<string>('write_output_file', {
-        fileName,
-        data: base64Data,
-        mediaType: mediaType === MediaType.VIDEO ? 'video' : 'image'
+        options: {
+          file_name: fileName,
+          data: base64Data,
+          media_type: mediaType === MediaType.VIDEO ? 'video' : 'image'
+        }
       });
 
       console.log(`[Download] ${mediaType === MediaType.VIDEO ? '视频' : '图像'}保存成功: ${localPath}`);
       return localPath;
-    } catch (error) {
-      console.error('[Download] 下载失败:', error);
+    } catch (error: any) {
+      console.error('[Download] 下载失败:', {
+        message: error?.message,
+        name: error?.name,
+        stack: error?.stack,
+        error
+      });
       throw error;
     }
   };
@@ -1202,7 +1281,7 @@ function App() {
       // --------------------------------
 
       let resultUrl = remoteUrl;
-      let localPath: string | null = null;
+      let localPath: string | undefined = undefined;
 
       // 对于视频，下载到本地以改善播放体验
       if (settings.mediaType === MediaType.VIDEO) {
@@ -1213,7 +1292,9 @@ function App() {
           ));
           localPath = await downloadVideoLocally(remoteUrl, job.id, settings.mediaType);
           // 转换为前端可用的 URL
-          resultUrl = convertFileSrc(localPath);
+          if (localPath) {
+            resultUrl = convertFileSrc(localPath);
+          }
           console.log(`[Job] 本地缓存完成: ${resultUrl}`);
         } catch (downloadError) {
           console.warn('[Job] 本地下载失败，使用远程URL:', downloadError);
@@ -1223,13 +1304,13 @@ function App() {
 
       const ext = settings.mediaType === MediaType.VIDEO ? 'mp4' : 'png';
       const prefix = settings.mediaType === MediaType.VIDEO ? 'Video' : 'Image';
-      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const dateStr = getCurrentBeijingDateString();
       const shortId = job.id.split('-')[1] || job.id.slice(0,6);
       const fileName = `${prefix}_${dateStr}_${shortId}.${ext}`;
 
       setJobs(prev => prev.map(j =>
         j.id === job.id
-          ? { ...j, status: JobStatus.COMPLETED, resultUrl, fileName, progress: 100 }
+          ? { ...j, status: JobStatus.COMPLETED, resultUrl, filePath: localPath, fileName, progress: 100 }
           : j
       ));
 
@@ -1366,35 +1447,74 @@ function App() {
     ));
   };
 
-  const handleRename = (id: string, newName: string) => {
-    setJobs(prev => prev.map(j => {
+  const handleRename = async (id: string, newBaseName: string) => {
+    // Sanitize input: remove illegal characters for file names
+    const sanitizedName = newBaseName.replace(/[<>:"/\\|?*]/g, '').trim();
+    if (!sanitizedName) {
+      console.error('[Rename] Invalid file name after sanitization');
+      return;
+    }
+
+    // Find the job to rename
+    const jobToRename = jobs.find(j => j.id === id);
+    if (!jobToRename || !jobToRename.filePath) {
+      console.error('[Rename] Job not found or no file path:', id);
+      return;
+    }
+
+    try {
+
+      // Call backend to rename the file
+      const newFullPath = await invoke<string>('rename_video_file', {
+        oldPath: jobToRename.filePath,
+        newBaseName: sanitizedName
+      });
+
+      // Update local state with new file path and name
+      const newResultUrl = convertFileSrc(newFullPath);
+      const extension = jobToRename.fileName?.includes('.') ? jobToRename.fileName.substring(jobToRename.fileName.lastIndexOf('.')) : '';
+      const newFileName = sanitizedName + extension;
+
+      setJobs(prev => prev.map(j => {
         if (j.id === id) {
-            return { ...j, fileName: newName };
+          return { ...j, fileName: newFileName, filePath: newFullPath, resultUrl: newResultUrl };
         }
         return j;
-    }));
-    if (focusedJob && focusedJob.id === id) {
-        setFocusedJob(prev => prev ? { ...prev, fileName: newName } : null);
+      }));
+
+      if (focusedJob && focusedJob.id === id) {
+        setFocusedJob(prev => prev ? { ...prev, fileName: newFileName, filePath: newFullPath, resultUrl: newResultUrl } : null);
+      }
+
+      console.log('[Rename] File renamed successfully:', newFullPath);
+    } catch (error) {
+      console.error('[Rename] Failed to rename file:', error);
+      // Fallback to just updating the display name if file rename fails
+      const extension = jobToRename.fileName?.includes('.') ? jobToRename.fileName.substring(jobToRename.fileName.lastIndexOf('.')) : '';
+      const newFileName = sanitizedName + extension;
+      setJobs(prev => prev.map(j => {
+        if (j.id === id) {
+          return { ...j, fileName: newFileName };
+        }
+        return j;
+      }));
+      if (focusedJob && focusedJob.id === id) {
+        setFocusedJob(prev => prev ? { ...prev, fileName: newFileName } : null);
+      }
     }
   };
 
   const handleOpenFolder = async () => {
-      if (!focusedJob) return;
+      // Open the MatrixGen_Output folder instead of specific file folder
+      console.log(`[UI] User clicked "Open Output Folder"`);
 
-      // 1. Log the click (Crucial for debugging)
-      console.log(`[UI] User clicked "Open Folder" for: ${focusedJob.fileName}`);
-
-      const folder = settings.mediaType === MediaType.VIDEO ? 'Video' : 'Image';
-      const path = `./${folder}/${focusedJob.fileName || 'file'}`;
-
-      // 2. Use the Rust command to bypass shell scope restrictions
       try {
-          await invoke('show_in_folder', { path });
-          console.log('[UI] Folder opened successfully');
+          await invoke('open_output_folder');
+          console.log('[UI] Output folder opened successfully');
       } catch (error) {
-          console.error('[UI] Failed to open folder:', error);
+          console.error('[UI] Failed to open output folder:', error);
           // Optional: Show a toast to the user
-          alert(`无法打开文件夹: ${error}`);
+          alert(`无法打开输出文件夹: ${error}`);
       }
   }
 
@@ -1445,10 +1565,10 @@ function App() {
 
 
 
-      <Sora2RolePanel 
-        isOpen={showSora2Role} 
+      <Sora2RolePanel
+        isOpen={showSora2Role}
         onClose={() => setShowSora2Role(false)}
-        apiKey={settings.apiKey}
+        apiKey={settings.videoApiKey || settings.apiKey}
         providerId={settings.videoProviderId || settings.providerId}
         mediaType={settings.mediaType}
       />
@@ -1857,10 +1977,20 @@ function App() {
                              <div className="absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 to-transparent z-20 flex justify-between items-start pointer-events-none">
                                 <div className="pointer-events-auto">
                                     <label className="text-[10px] text-gray-500 block mb-1 uppercase tracking-wider">File Name (Click to Rename)</label>
-                                    <input 
+                                    <input
                                         type="text"
-                                        value={focusedJob.fileName || `file_${focusedJob.id}`}
-                                        onChange={(e) => handleRename(focusedJob.id, e.target.value)}
+                                        value={editingFileName}
+                                        onChange={(e) => setEditingFileName(e.target.value)}
+                                        onBlur={() => handleRename(focusedJob.id, editingFileName)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.currentTarget.blur(); // Trigger blur to commit rename
+                                            } else if (e.key === 'Escape') {
+                                                // Reset to original name on Escape
+                                                setEditingFileName(focusedJob.fileName || `file_${focusedJob.id}`);
+                                                e.currentTarget.blur();
+                                            }
+                                        }}
                                         className="bg-transparent text-xl font-mono text-white font-bold border-b border-transparent hover:border-white/20 focus:border-primary focus:outline-none transition-all w-[400px]"
                                     />
                                     <p className="text-[10px] text-green-500/80 mt-1 flex items-center gap-1">
@@ -1935,7 +2065,7 @@ function App() {
                                  <div className="space-y-2">
                                     <label className="text-[10px] uppercase text-gray-600 font-bold tracking-widest">存储路径 (本地)</label>
                                     <div className="font-mono text-xs text-gray-500 select-all truncate mb-2">
-                                        ./{settings.mediaType === MediaType.VIDEO ? 'Video' : 'Image'}/{focusedJob.fileName || '...'}
+                                        ./MatrixGen_Output/{focusedJob.fileName || '...'}
                                     </div>
                                     {focusedJob.status === JobStatus.COMPLETED && (
                                         <button 
@@ -1943,7 +2073,7 @@ function App() {
                                             className="w-full flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/30 text-gray-300 hover:text-white py-2 rounded transition-all text-xs font-medium"
                                         >
                                             <FolderIcon className="w-3.5 h-3.5" />
-                                            打开所在文件夹
+                                            打开输出文件夹
                                         </button>
                                     )}
                                  </div>

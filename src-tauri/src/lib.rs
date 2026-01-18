@@ -1,32 +1,42 @@
 // 引入 commands 模块
 mod commands;
 
-use std::sync::Mutex;
-use tauri::{State, Manager};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::{Manager, State};
 
 fn extract_default_plugin(app: &tauri::App) -> Result<(), String> {
     // 1. Resolve source path (bundled resource or development path)
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
 
-    let exe_dir = exe_path.parent()
+    let exe_dir = exe_path
+        .parent()
         .ok_or("Failed to get executable directory")?;
 
     // Check if in development mode (target/debug exists)
-    let is_dev_mode = exe_dir.parent().and_then(|p| p.parent()).map_or(false, |project_root| {
-        project_root.join("src-tauri").exists() && project_root.join("src").exists()
-    });
+    let is_dev_mode = exe_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map_or(false, |project_root| {
+            project_root.join("src-tauri").exists() && project_root.join("src").exists()
+        });
 
     let resource_path = if is_dev_mode {
         // Development mode: copy from source
         let project_root = exe_dir.parent().and_then(|p| p.parent()).unwrap();
-        project_root.join("src-tauri").join("resources").join("default-provider.js")
+        project_root
+            .join("src-tauri")
+            .join("resources")
+            .join("default-provider.js")
     } else {
         // Production mode: resolve from bundled resources
         app.path()
-            .resolve("resources/default-provider.js", tauri::path::BaseDirectory::Resource)
+            .resolve(
+                "resources/default-provider.js",
+                tauri::path::BaseDirectory::Resource,
+            )
             .map_err(|e| format!("Failed to resolve resource path: {}", e))?
     };
 
@@ -63,7 +73,10 @@ fn extract_default_plugin(app: &tauri::App) -> Result<(), String> {
             .map_err(|e| format!("Failed to copy default plugin: {}", e))?;
         println!("[PluginExtract] Default plugin extracted successfully");
     } else {
-        println!("[PluginExtract] Source plugin file not found: {:?}", resource_path);
+        println!(
+            "[PluginExtract] Source plugin file not found: {:?}",
+            resource_path
+        );
         // Don't return error in dev mode if file doesn't exist yet
         if !is_dev_mode {
             return Err(format!("Plugin resource not found: {:?}", resource_path));
@@ -76,6 +89,7 @@ fn extract_default_plugin(app: &tauri::App) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
         // HTTP 插件（用于网络请求）
         .plugin(tauri_plugin_http::init())
         // 自动更新插件
@@ -85,14 +99,16 @@ pub fn run() {
         // 对话框插件（用于文件选择）
         .plugin(tauri_plugin_dialog::init())
         // 管理状态（防止并发生成）
-        .manage(Mutex::new(false))  // generation_lock: Mutex<bool>
+        .manage(Mutex::new(false)) // generation_lock: Mutex<bool>
         // 注册所有命令
         .invoke_handler(tauri::generate_handler![
             commands::proxy_http_request,
+            commands::download_file,
             commands::upload_file,
             // commands::upload_video_to_oss, // 已迁移到 Supabase Storage
             commands::write_temp_file_binary,
             commands::write_output_file,
+            commands::open_output_folder,
             commands::check_for_updates,
             commands::install_update,
             commands::relaunch_app,
@@ -106,7 +122,8 @@ pub fn run() {
             commands::show_in_folder,
             commands::check_generation_lock,
             commands::release_generation_lock,
-            commands::execute_powershell_command
+            commands::execute_powershell_command,
+            commands::rename_video_file
         ])
         .setup(|app| {
             // 在应用启动时清理临时文件

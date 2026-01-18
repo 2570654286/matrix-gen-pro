@@ -18,7 +18,12 @@ export const http = {
     const startTime = Date.now();
     console.log(`[API] ─────────────────────────────────────────────────────────────`);
     console.log(`[API] Request: ${options.method} ${options.url}`);
-    console.log(`[API] Headers:`, JSON.stringify(options.headers, null, 2));
+    console.log(`[API] Headers:`, JSON.stringify(options.headers, (key, value) => {
+      if (key && key.toLowerCase() === 'authorization') {
+        return '[HIDDEN]';
+      }
+      return value;
+    }, 2));
     if (options.body) {
       console.log(`[API] Body:`, JSON.stringify(options.body, null, 2));
     }

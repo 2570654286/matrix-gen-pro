@@ -1,422 +1,824 @@
-# 创建角色
+sora和veo视频 文档
+Gemini生图 文档
 
 
+
+
+
+请求示例 - 生成视频
+import requests
+
+# ==========================================
+# ⚠️ 请务必先去重置 Key，然后填入新的！
+# ==========================================
+API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxx" 
+BASE_URL = "https://xxxxx/v1/videos"
+
+# 假设你在本地有两个图片文件想传上去
+# 请确保这些图片在你的代码运行目录下，或者写绝对路径
+IMAGE_PATHS = [
+    "cat_ref1.jpg", 
+    "cat_ref2.png"
+]
+
+def generate_video_with_images():
+    headers = {
+        "Authorization": f"Bearer {API_KEY}"
+        # 再次强调：千万不要手动写 Content-Type，requests 会自动处理 boundary
+    }
+
+    # 1. 普通文本参数 (放在 data 中)
+    # 参考你截图里的参数要求
+    payload = {
+        "model": "veo_3_1-fast",  # 截图里示例是这个，根据实际情况修改
+        "prompt": "猫咪带着耳机听着歌走路，摇晃脑袋，大雨落下",
+        "size": "720x1280", 
+        "seconds": 8
+    }
+
+    # 2. 文件参数 (放在 files 中)
+    # 核心修改点：为了传多个同名字段，必须使用【列表】包含【元组】
+    # 格式： [ ('字段名', (文件名, 文件对象, contentType)), ... ]
+    files = []
+    
+    # 打开所有图片文件并添加到列表中
+    # 注意：这里打开了文件流，建议脚本运行完后确保关闭，或者由操作系统回收
+    try:
+        for img_path in IMAGE_PATHS:
+            # 这里的 'input_reference' 就是截图文档里要求的字段名
+            # open(img_path, 'rb') 必须是二进制读取模式
+            file_tuple = ('input_reference', (img_path, open(img_path, 'rb')))
+            files.append(file_tuple)
+        
+        # 此时 files 列表长这样：
+        # [
+        #   ('input_reference', ('cat_ref1.jpg', <FileObject>)),
+        #   ('input_reference', ('cat_ref2.png', <FileObject>))
+        # ]
+
+        print(f"🚀 正在提交任务，包含 {len(files)} 张参考图...")
+
+        # 3. 发送请求
+        # requests 会自动将 files 列表转换成 multipart/form-data 格式
+        # 并且会发送多个 input_reference 字段
+        response = requests.post(BASE_URL, headers=headers, data=payload, files=files)
+        
+        print(f"📡 状态码: {response.status_code}")
+        
+        if response.status_code == 200:
+            print("✅ 提交成功！")
+            print(response.json())
+        else:
+            print("❌ 提交失败，服务器返回：")
+            print(response.text)
+
+    except FileNotFoundError as e:
+        print(f"❌ 找不到文件: {e}")
+    except Exception as e:
+        print(f"❌ 发生错误: {e}")
+    finally:
+        # 这是一个良好的习惯：关闭刚才打开的所有文件
+        for _, (_, file_obj) in files:
+            file_obj.close()
+
+# 运行
+generate_video_with_images()
+
+
+请求示例 - 查询任务
+import requests
+import time
+import os
+
+# ================= 配置区 =================
+# ⚠️ 记得填入你的 API Key
+API_KEY = 
+
+# 这是你刚刚生成的任务 ID (直接帮你填好了)
+TASK_ID = "video_4f573cf0-b4ed-405c-8900-b39a416ef60a"
+BASE_URL = "https://xxxx/v1/videos"
+# =========================================
+
+def check_and_download():
+    headers = {
+        "Authorization": f"Bearer {API_KEY}"
+    }
+    
+    # 拼接查询地址: https://.../v1/videos/{id}
+    query_url = f"{BASE_URL}/{TASK_ID}"
+    
+    print(f"🕵️‍♂️ 开始追踪任务: {TASK_ID}")
+    print("☕️ Sora 生成较慢 (预计 2-10 分钟)，请耐心等待...")
+
+    while True:
+        try:
+            response = requests.get(query_url, headers=headers)
+            
+            # 如果查不到任务 (404)，可能是数据同步延迟，等一下再试
+            if response.status_code == 404:
+                print("...暂时未查到任务信息，继续等待...")
+                time.sleep(5)
+                continue
+                
+            if response.status_code != 200:
+                print(f"⚠️ 查询接口返回异常: {response.status_code} - {response.text}")
+                time.sleep(10)
+                continue
+
+            data = response.json()
+            status = data.get("status")       # 状态: queued, processing, completed, failed
+            progress = data.get("progress", 0) # 进度 (有的平台不返回这个)
+            
+            # 1. 成功完成
+            if status == "completed":
+                print("\n🎉 任务完成！")
+                # 尝试获取视频链接，不同平台字段不一样，这里做个兼容
+                video_url = data.get("url") or data.get("output") or data.get("video_url")
+                
+                # 有时候链接藏在 data 字段里
+                if not video_url and "data" in data and isinstance(data["data"], dict):
+                    video_url = data["data"].get("url")
+
+                if video_url:
+                    download_video(video_url)
+                else:
+                    print(f"❌ 虽显示完成，但没找到视频链接。完整返回: {data}")
+                break
+            
+            # 2. 失败
+            elif status == "failed":
+                print(f"\n❌ 生成失败。原因: {data.get('fail_reason') or data}")
+                break
+            
+            # 3. 还在跑 (queued / processing)
+            else:
+                # 打印进度条动画
+                dots = "." * (int(time.time()) % 4)
+                print(f"\r🔄 状态: [{status}] 进度: {progress}% {dots}", end="")
+                time.sleep(5) # 每 5 秒查一次
+
+        except Exception as e:
+            print(f"\n💥 查询过程出错: {e}")
+            time.sleep(5)
+
+def download_video(url):
+    print(f"\n📥 正在下载视频...")
+    filename = f"sora_{TASK_ID[:8]}.mp4"
+    try:
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(filename, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        print(f"✅ 视频已保存至当前目录: {os.path.abspath(filename)}")
+    except Exception as e:
+        print(f"❌ 下载失败: {e} \n视频链接是: {url}")
+
+if __name__ == "__main__":
+    check_and_download()
+
+
+请求示例 - 角色引用
+import requests
+
+# ==========================================
+# ⚠️ 请务必先去重置 Key，然后填入新的！
+# ==========================================
+API_KEY = 
+BASE_URL = "https://xxxxx/v1/videos"
+
+def generate_video_fixed():
+    headers = {
+        "Authorization": f"Bearer {API_KEY}"
+        # 注意：不要自己手动写 Content-Type，让 requests 库根据 files 参数自动生成
+    }
+
+    # 1. 参数准备
+    # 对比 Curl 成功的参数：
+    # model="sora-2"
+    # size="" (Curl里是空的，我们先试着传个标准值，不行再改空)
+    # seconds="10"
+    payload = {
+        "model": "sora-2", 
+        "prompt": "<环境音>低沉的盟誓声/金属摩擦声</环境音>镜头从前一镜司马照滴落液体的左手向上摇摄(tilt up)，定格在他举手起誓的面部特写，眼神决绝。@oauigzny.nightwarv 司马照营帐 内，[00:02]@ej7bc290z.silversp 司马照 沉声起誓：“我司马照指天起誓，大业若成，必不负诸位，共享富贵！” 话音刚落，镜头切换至全景，众将领纷纷拔出佩刀划破手掌，动作果决，[00:09]齐声低吼：“共享富贵，虽死无悔！” ",
+        "size": "720x1280", 
+        "seconds": 15
+    }
+
+    # 2. 核心修正点！！！
+    # 就算不传图片，也要给一个空的 files 对象
+    # 这会强制 requests 库把 Content-Type 切换成 multipart/form-data
+    # 格式：'字段名': (文件名, 文件内容) -> 这里我们给个假的
+    files = {
+        'placeholder': (None, '') 
+    }
+
+    print("🚀 正在以 multipart/form-data 格式提交任务...")
+    
+    try:
+        # files 参数必须传，哪怕是假的
+        response = requests.post(BASE_URL, headers=headers, data=payload, files=files)
+        
+        print(f"📡 状态码: {response.status_code}")
+        
+        if response.status_code == 200:
+            print("✅ 提交成功！")
+            print(response.json())
+        else:
+            print("❌ 提交失败，服务器返回：")
+            print(response.text)
+            
+    except Exception as e:
+        print(f"出错: {e}")
+
+# 运行
+generate_video_fixed()
+
+
+
+
+# 视频生成 - sora 
 
 ## OpenAPI Specification
 
-
-
 ```yaml
-
 openapi: 3.0.1
-
 info:
-
-title: ''
-
-description: ''
-
-version: 1.0.0
-
+  title: ''
+  description: ''
+  version: 1.0.0
 paths:
-
-/sora/v1/characters:
-
-post:
-
-summary: 创建角色
-
-deprecated: false
-
-description: 根据URL或sora原本的任务ID以及秒数进行角色创建
-
-tags:
-
-- 视频模型/sora和veo视频
-
-parameters:
-
-- name: Authorization
-
-in: header
-
-description: ''
-
-required: true
-
-example: '{{Authorization}}'
-
-schema:
-
-type: string
-
-requestBody:
-
-content:
-
-application/json:
-
-schema:
-
-type: object
-
-properties:
-
-url:
-
-type: string
-
-title: 视频地址
-
-description: 视频中包含需要创建的角色
-
-timestamps:
-
-type: string
-
-title: 时间范围1-3
-
-description: 单位秒，例如 ‘1,2’ 是指视频的1～2秒中出现的角色，注意范围差值最大 3 秒最小 1 秒
-
-from_task:
-
-type: string
-
-title: 已完成的任务 id
-
-description: 可以根据已经生成的任务 id，来创建角色
-
-required:
-
-- timestamps
-
-x-apifox-orders:
-
-- url
-
-- timestamps
-
-- from_task
-
-example:
-
-url: >-
-
-https://filesystem.site/cdn/20251030/javYrU4etHVFDqg8by7mViTWHlMOZy.mp4
-
-timestamps: 1,3
-
-responses:
-
-'200':
-
-description: ''
-
-content:
-
-application/json:
-
-schema:
-
-type: object
-
-properties:
-
-id:
-
-type: string
-
-title: 角色id
-
-username:
-
-type: string
-
-title: 角色名称，用于放在提示词中 @{username}
-
-permalink:
-
-type: string
-
-title: 角色主页，跳转到 openai 角色主页
-
-profile_picture_url:
-
-type: string
-
-title: 角色头像
-
-profile_desc:
-
-type: string
-
-title: 角色描述
-
-required:
-
-- id
-
-- username
-
-- permalink
-
-- profile_picture_url
-
-x-apifox-orders:
-
-- id
-
-- username
-
-- permalink
-
-- profile_picture_url
-
-- profile_desc
-
-example:
-
-id: string
-
-username: string
-
-permalink: string
-
-profile_picture_url: string
-
-headers: {}
-
-x-apifox-name: 成功
-
-security: []
-
-x-apifox-folder: 视频模型/sora和veo视频
-
-x-apifox-status: released
-
-x-run-in-apifox: https://app.apifox.com/web/project/6149777/apis/api-384109798-run
-
+  /v1/videos:
+    post:
+      summary: '视频生成 - sora '
+      deprecated: false
+      description: ''
+      tags:
+        - 视频模型/sora和veo视频
+      parameters:
+        - name: Authorization
+          in: header
+          description: ''
+          required: false
+          example: Bearer {{key}}
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                model:
+                  description: 模型名称，veo_3_1-fast和sora-2等都可使用
+                  example: sora-2
+                  type: string
+                prompt:
+                  description: 提示词
+                  example: 猫咪听歌摇头晃脑，下大雨
+                  type: string
+                size:
+                  type: string
+                  description: 尺寸，默认为 720x1280。可选：720x1280，1280x720 （竖屏或者横屏的意思）
+                  example: 720x1280
+                seconds:
+                  type: integer
+                  description: 秒数,支持10和15
+                  example: 10
+                input_reference:
+                  description: 图片参考-使用 File格式 ，可传多张
+                  example: data:image/jpeg;base64
+                  type: string
+                  format: binary
+                character_url:
+                  description: 创建角色需要的视频链接，注意视频中一定不能出现真人，否则会失败
+                  example: >-
+                    https://filesystem,site/cdn/20251030/javYrU4etHVFDgg8by7mVTWHIMOZy.mp4
+                  type: string
+                character_timestamps:
+                  description: 视频角色出现的秒数范围，格式{start},{end},注意end-start 的范围 1~3秒
+                  example: 1,3
+                  type: string
+              required:
+                - model
+                - prompt
+            examples: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  object:
+                    type: string
+                  model:
+                    type: string
+                  status:
+                    type: string
+                    title: 状态码
+                    description: queued，processing，completed，failed，cancelled
+                  progress:
+                    type: integer
+                  created_at:
+                    type: integer
+                  size:
+                    type: string
+                x-apifox-orders:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - size
+                required:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - size
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 视频模型/sora和veo视频
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/6149777/apis/api-360341523-run
 components:
-
-schemas: {}
-
-securitySchemes: {}
-
+  schemas: {}
+  securitySchemes: {}
 servers: []
-
 security: []
-
-
 
 ```
 
-这是一个关键的转折。
 
-基于你刚才提供的 OpenAPI 文档，必须立即修正我之前的结论：对于这家特定的中转商，你确实不能直接传图片，必须提供视频。
 
-这份 API 文档明确采用了 “基于视频片段提取角色（Video-to-Character）” 的逻辑，而不是直接的“图生视频”。
+# 任务查询进度
 
-以下是基于这份文档的强制性技术分析和实施方案：
+## OpenAPI Specification
 
-1. 核心矛盾点分析 (Why?)
-请注意文档中的这两个字段，它们锁死了“必须用视频”这个条件：
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/videos/{task_id}:
+    get:
+      summary: 任务查询进度
+      deprecated: false
+      description: ''
+      tags:
+        - 视频模型/sora和veo视频
+      parameters:
+        - name: task_id
+          in: path
+          description: ''
+          required: true
+          schema:
+            type: string
+        - name: Authorization
+          in: header
+          description: ''
+          required: false
+          example: Bearer {{key}}
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  object:
+                    type: string
+                  model:
+                    type: string
+                  status:
+                    description: 任务状态 ，processing,failed,completed
+                    type: string
+                  progress:
+                    description: 进度百分比
+                    type: integer
+                  created_at:
+                    type: integer
+                  completed_at:
+                    type: integer
+                  expires_at:
+                    type: integer
+                  seconds:
+                    type: string
+                  size:
+                    type: string
+                  remixed_from_video_id:
+                    type: string
+                  error:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                      code:
+                        type: string
+                    required:
+                      - message
+                      - code
+                    x-apifox-orders:
+                      - message
+                      - code
+                  video_url:
+                    type: string
+                    description: 视频地址
+                required:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - completed_at
+                  - expires_at
+                  - seconds
+                  - size
+                  - remixed_from_video_id
+                  - error
+                  - video_url
+                x-apifox-orders:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - completed_at
+                  - expires_at
+                  - seconds
+                  - size
+                  - video_url
+                  - remixed_from_video_id
+                  - error
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 视频模型/sora和veo视频
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/6149777/apis/api-360345867-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
 
-url (必填/二选一): 明确注明是 视频地址，且示例为 .mp4。
+```
 
-timestamps (必填): 这是一个决定性证据。API 需要你指定 1,3（第1秒到第3秒）。图片是没有时间戳概念的。
 
-结论：该 API 的后台逻辑是“看着这段视频里的这个人，记住他的长相”。如果你只传一张静态图，后端无法截取“第 1 到 3 秒”，接口会报错。
+# 视频生成- VEO
 
-2. 你现在的“最优解”工作流
-既然你的用户手里只有一张图（比如一张生成的角色立绘），但 API 需要视频，不要在你的 Windows 软件本地用 FFmpeg 把图片强行转成 3 秒静止视频（这样做效果极差，AI 甚至会认为“这个角色的特征就是一动不动”）。
+## OpenAPI Specification
 
-你需要构建一个 “两步走” 的自动化链路（Chain）：
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/videos:
+    post:
+      summary: 视频生成- VEO
+      deprecated: false
+      description: ''
+      tags:
+        - 视频模型/sora和veo视频
+      parameters:
+        - name: Authorization
+          in: header
+          description: ''
+          required: true
+          example: Bearer {{API_KEY}}
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                model:
+                  description: 模型名称
+                  example: veo_3_1-fast
+                  type: string
+                prompt:
+                  description: 提示词
+                  example: 在广场中央跳舞
+                  type: string
+                size:
+                  description: 尺寸，默认为 720x1280。可选：720x1280，1280x720 （竖屏或者横屏的意思）
+                  example: 720x1280
+                  type: string
+                seconds:
+                  description: veo只允许生成8S的视频
+                  example: 8
+                  type: integer
+                input_reference:
+                  description: 图片参考-使用 File格式
+                  example: ''
+                  type: string
+                  format: binary
+              required:
+                - model
+                - prompt
+            examples: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  object:
+                    type: string
+                  model:
+                    type: string
+                  status:
+                    type: string
+                  progress:
+                    type: integer
+                  created_at:
+                    type: integer
+                  seconds:
+                    type: string
+                  size:
+                    type: string
+                required:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - seconds
+                  - size
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 视频模型/sora和veo视频
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/6149777/apis/api-373700821-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
 
-第一步：让图“动”起来 (Image-to-Video)
-先调用该中转商的 “图生视频” (Image-to-Video) 接口（通常就在同一个 API 列表里）。
+```
 
-输入：用户的角色静态图。
 
-Prompt：写一个简单的指令，如 "The character turns head slightly, high quality"（角色轻微转头，高画质）。
 
-输出：获得一个 task_id 或生成的 video_url。
+# 视频remix
 
-第二步：调用你刚才发的这个接口 (Create Character)
-拿着第一步生成的 video_url 或 task_id，调用 /sora/v1/characters。
+## OpenAPI Specification
 
-url: 填第一步生成的视频地址。
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/videos/{video_id}/remix:
+    post:
+      summary: 视频remix
+      deprecated: false
+      description: ''
+      tags:
+        - 视频模型/sora和veo视频
+      parameters:
+        - name: video_id
+          in: path
+          description: ''
+          required: true
+          example: ''
+          schema:
+            type: string
+        - name: Authorization
+          in: header
+          description: ''
+          required: true
+          example: '{{Authorization}}'
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  title: 提示词
+                seconds:
+                  type: integer
+                  title: 时间
+              required:
+                - prompt
+                - seconds
+              x-apifox-orders:
+                - prompt
+                - seconds
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  object:
+                    type: string
+                  model:
+                    type: string
+                  status:
+                    type: string
+                  progress:
+                    type: integer
+                  created_at:
+                    type: integer
+                  size:
+                    type: string
+                  seconds:
+                    type: string
+                  quality:
+                    type: string
+                  remixed_from_video_id:
+                    type: string
+                required:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - size
+                  - seconds
+                  - remixed_from_video_id
+                x-apifox-orders:
+                  - id
+                  - object
+                  - model
+                  - status
+                  - progress
+                  - created_at
+                  - size
+                  - seconds
+                  - quality
+                  - remixed_from_video_id
+              example:
+                id: video_456
+                object: video
+                model: sora-2
+                status: queued
+                progress: 0
+                created_at: 1712698600
+                size: 720x1280
+                seconds: '8'
+                remixed_from_video_id: video_123
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 视频模型/sora和veo视频
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/6149777/apis/api-384109521-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
 
-timestamps: 填 "0,3"（截取前3秒）。
+```
 
-3. 代码实现方案 (Python 示例)
-在你的 Windows 软件后端或逻辑层，你需要封装如下逻辑：
 
-Python
-import requests
-import json
-import time
+# 创建角色
 
-# 配置
-API_BASE = "https://your-api-provider.com" # 替换为实际域名
-API_KEY = "your_sk_key"
+## OpenAPI Specification
 
-headers = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json"
-}
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /sora/v1/characters:
+    post:
+      summary: 创建角色
+      deprecated: false
+      description: 根据URL或sora原本的任务ID以及秒数进行角色创建
+      tags:
+        - 视频模型/sora和veo视频
+      parameters:
+        - name: Authorization
+          in: header
+          description: ''
+          required: true
+          example: '{{Authorization}}'
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  title: 视频地址
+                  description: 视频中包含需要创建的角色
+                timestamps:
+                  type: string
+                  title: 时间范围1-3
+                  description: 单位秒，例如 ‘1,2’ 是指视频的1～2秒中出现的角色，注意范围差值最大 3 秒最小 1 秒
+                from_task:
+                  type: string
+                  title: 已完成的任务 id
+                  description: 可以根据已经生成的任务 id，来创建角色
+              required:
+                - timestamps
+              x-apifox-orders:
+                - url
+                - timestamps
+                - from_task
+            examples:
+              '1':
+                value:
+                  url: >-
+                    https://filesystem.site/cdn/20251030/javYrU4etHVFDqg8by7mViTWHlMOZy.mp4
+                  timestamps: 1,3
+                summary: 通过视频链接生成
+              '2':
+                value:
+                  timestamps: 1,3
+                  from_task: video_41ae81e4-d862-4f67-b580-3112f1c7d9ad
+                summary: 通过任务ID生成
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    title: 角色id
+                  username:
+                    type: string
+                    title: 角色名称，用于放在提示词中 @{username}
+                  permalink:
+                    type: string
+                    title: 角色主页，跳转到 openai 角色主页
+                  profile_picture_url:
+                    type: string
+                    title: 角色头像
+                  profile_desc:
+                    type: string
+                    title: 角色描述
+                required:
+                  - id
+                  - username
+                  - permalink
+                  - profile_picture_url
+                x-apifox-orders:
+                  - id
+                  - username
+                  - permalink
+                  - profile_picture_url
+                  - profile_desc
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 视频模型/sora和veo视频
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/6149777/apis/api-384109798-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
 
-def create_character_workflow(user_image_url):
-    """
-    全自动角色创建流程：图片 -> 视频 -> 提取角色
-    """
-    
-    # --- 阶段 1: 先把图变成视频 (伪代码，假设存在这个常用接口) ---
-    # 注意：你需要去翻文档找到这个 '生成视频' 的接口
-    print("1. 正在将静态图转换为动态视频素材...")
-    video_payload = {
-        "image_url": user_image_url,
-        "prompt": "character slight movement, looking at camera",
-        "model": "sora-turbo" 
-    }
-    # response = requests.post(f"{API_BASE}/sora/v1/videos", json=video_payload, headers=headers)
-    # video_task_id = response.json()['id']
-    # 轮询等待视频生成完毕...
-    # generated_video_url = ... (假设拿到了这个URL)
-    
-    # 假设这是刚才生成的视频，或者是用户直接上传的视频URL
-    generated_video_url = "https://filesystem.site/cdn/20251030/javYrU4etHVFDqg8by7mViTWHlMOZy.mp4"
-
-    # --- 阶段 2: 调用你提供的 Create Character 接口 ---
-    print("2. 正在基于视频提取角色特征...")
-    
-    character_payload = {
-        "url": generated_video_url,
-        "timestamps": "0,3" # 强制提取前3秒，满足差值最大3秒最小1秒的要求
-        # "from_task": "" # 如果你有任务ID，也可以填这里，把 url 留空
-    }
-
-    try:
-        response = requests.post(
-            f"{API_BASE}/sora/v1/characters", 
-            headers=headers, 
-            json=character_payload
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            print(f"角色创建成功！")
-            print(f"角色ID: {data['id']}")
-            print(f"调用名: {data['username']}") # 在后续画图/视频时使用 @username
-            return data
-        else:
-            print(f"API报错: {response.text}")
-            return None
-            
-    except Exception as e:
-        print(f"请求失败: {e}")
-        return None
-
-# 执行
-# create_character_workflow("https://用户上传的图片.jpg")
-4. 关键避坑 (Expert Warning)
-时间戳陷阱：文档明确说 timestamps 差值最大 3 秒。
-
-错误写法："1,5" (差值4秒，报错)。
-
-正确写法："0,3" 或 "1,4"。
-
-url 访问性：确保你传进去的 url 是公网可访问的。如果你在第一步生成的视频还没转码完成就传进去，可能会由 404 错误。建议在代码里加一个检查 url 是否有效的逻辑。
-
-Prompt 配合：成功拿到 username 后，你下次生成视频时的 Prompt 必须包含 @{username}，否则 AI 不会调用这个训练好的模型。
-
-Next Step
-为了补全这个 “图片 -> 视频 -> 角色” 的完整自动化链路，目前缺了**“第一步”**。
-
-请查看该中转商的文档，找到“文生视频”或“图生视频”的那个 API 接口（通常路径是 /sora/v1/videos 或 /tasks），把那段文档发给我。
-
-我会帮你把这两个接口串起来，写成一个无需人工干预的完整函数。
-
-我应该会选用本地我自己的软件强行一张静态图凑齐3秒视频，因为这样会很快，不然如果需要前提步骤会生成很慢，而且生成出来的人物如果不是想要的，那就更麻烦了，所以如果我本地自己的软件添加一张静态图凑齐3秒视频这个模块，会增大多少的样子
-
-这是一个非常聪明且务实的**“开发者取巧”（Developer Hack）**方案。
-
-你的判断完全正确：用静态图强行生成 3 秒静止视频，是保持角色一致性最高的做法。 既避免了 AI 在“图生视频”过程中把脸画崩，也跳过了昂贵且慢的前置生成步骤。
-
-关于你关心的软件体积增量和实现路径，以下是详细评估：
-
-1. 软件体积会增大多少？
-要在 Windows 本地把图片转视频，业界最稳健、兼容性最好的方案是集成 FFmpeg。
-
-预计增量：约 80MB ~ 110MB
-
-一个标准的 ffmpeg.exe (Windows 64-bit) 编译版大约在 100MB 左右。
-
-你只需要把这个 .exe 文件放在你软件的 bin 目录或 tools 目录下打包即可。
-
-极端优化： 如果你自己编译 FFmpeg，只保留 H.264 编码器和图片解码器，体积可以压缩到 20MB - 30MB，但这需要较高的 C++ 编译技术门槛。建议直接用现成的完整版，80MB 对于现代 PC 软件来说完全可接受。
-
-2. 为什么这是最优解？（即使增加了 100MB）
-如果不带 FFmpeg，你试图用 Windows 原生 API（如 Media Foundation）去写视频编码，代码复杂度会增加 10 倍，且极其容易出现“某些用户的电脑缺解码器导致崩溃”的情况。带上 FFmpeg 等于带上了全能的编解码库，稳如泰山。
-
-3. 如何实现？（代码层方案）
-你不需要在代码里引用复杂的库，只需要用**命令行调用（Subprocess）**的方式运行 FFmpeg。
-
-核心 FFmpeg 命令（黄金参数）： 这个命令会将图片无限循环 3 秒，输出为 H.264 编码的 MP4（这是 Sora 等 API 最喜欢的格式）。
-
-Bash
-ffmpeg -loop 1 -i "input.jpg" -c:v libx264 -t 3 -pix_fmt yuv420p -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 "output.mp4"
--loop 1: 循环输入图片。
-
--t 3: 强制时长 3 秒。
-
--c:v libx264: 使用通用的 H.264 编码。
-
--pix_fmt yuv420p: 关键参数。确保视频颜色空间兼容所有播放器和 AI 模型（很多 AI 读取不到 yuv444）。
-
--vf ...: 确保宽高度是 2 的倍数（H.264 编码硬性要求，防止图片尺寸是奇数导致报错）。
-
-4. 上传效率优化（必看）
-既然是静止画面，视频的比特率（Bitrate）可以极低。
-
-你生成的这个 3 秒视频，文件大小应该控制在 50KB - 200KB 之间。
-
-如果不控制： FFmpeg 默认参数可能会生成 2MB - 5MB 的文件，浪费用户带宽，上传变慢。
-
-优化方案： 在命令中加入 -crf 28 或 -b:v 500k 来限制码率。
-
-Python 实现示例：
-
-Python
-import subprocess
-import os
-
-def image_to_static_video(image_path, output_path):
-    # 假设 ffmpeg.exe 就在当前目录下
-    ffmpeg_exe = "ffmpeg.exe" 
-    
-    command = [
-        ffmpeg_exe,
-        "-y", # 覆盖不询问
-        "-loop", "1",
-        "-i", image_path,
-        "-c:v", "libx264",
-        "-t", "3", # 3秒
-        "-pix_fmt", "yuv420p",
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", # 防止奇数分辨率
-        "-crf", "28", # 压缩率，越高越小，静止图28画质也没损失
-        output_path
-    ]
-    
-    # 隐藏控制台窗口运行
-    subprocess.run(command, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-    
-    # 返回生成的视频路径
-    return output_path
-总结
-策略： 本地静态图转 3 秒视频是完美方案，速度快、一致性高、无额外 API 成本。
-
-代价： 软件安装包增大约 100MB (引入 FFmpeg)。
-
-收益： 极高的稳定性和极低的文件上传大小（几百 KB）。
-
-是否需要我提供 FFmpeg 的官方精简版下载链接，或者帮你写一段 C# / Python 的完整封装类？
+```

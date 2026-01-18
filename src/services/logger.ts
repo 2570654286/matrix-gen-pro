@@ -1,4 +1,5 @@
 import { emit } from '@tauri-apps/api/event';
+import { formatDateTimeToBeijing } from '../utils/timeUtils';
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'success';
 
@@ -20,8 +21,15 @@ class LoggerService {
   }
 
   private formatTimestamp(): string {
-    const now = new Date();
-    return now.toISOString().slice(0, 19).replace('T', ' ');
+    return formatDateTimeToBeijing(Date.now(), {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).replace(/\//g, '-');
   }
 
   private formatMessage(args: any[]): string {
