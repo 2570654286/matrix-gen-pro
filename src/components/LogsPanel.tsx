@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { XIcon, CopyIcon, SearchIcon } from './Icons';
 import { logger, type LogEntry } from '../services/logger';
+import { useModalClickOutside } from '../hooks/useModalClickOutside';
 
 
 
@@ -69,11 +70,15 @@ export const LogsPanel: React.FC<LogsPanelProps> = ({ isOpen, onClose }) => {
     }
   };
 
+  // 使用 hook 处理模态框点击外部关闭的逻辑
+  const logsPanelHandlers = useModalClickOutside(onClose);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" {...logsPanelHandlers}>
       <div 
+        data-modal-content
         className="w-[90%] max-w-5xl h-[80%] bg-[#0a0a0a] border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >

@@ -53,59 +53,79 @@ class FFmpegService {
     return `data:${mimeType};base64,${base64Data}`;
   }
 
-  // 将图片转换为 5 秒静态视频（带静音音频）
-  async imageToVideo(imagePath: string): Promise<Uint8Array> {
+  /**
+   * 将图片转换为 3 秒静态视频。
+   * @param imagePath 图片路径
+   * @param audioPath 可选。若提供，则将该音频裁剪至 3 秒后混入视频；不足 3 秒则静音补齐；不提供则使用静音。
+   */
+  async imageToVideo(imagePath: string, audioPath?: string | null): Promise<Uint8Array> {
     if (!this.loaded) {
       await this.load();
     }
 
+    const { invoke } = await import('@tauri-apps/api/core');
     const fileName = imagePath.split(/[/\\]/).pop() || 'image.jpg';
     const inputName = `input_${fileName}`;
     const outputName = 'output.mp4';
 
-    console.log('[FFmpegService] 开始转换图片为视频:', imagePath);
+    const useCustomAudio = !!audioPath;
+
+    console.log('[FFmpegService] 开始转换图片为视频（无损，3秒）:', imagePath, useCustomAudio ? `+ 声音: ${audioPath}` : '(静音)');
 
     try {
-      // 通过 Tauri 读取文件
-      const { invoke } = await import('@tauri-apps/api/core');
       const fileContent: string = await invoke('read_file_base64', { options: { path: imagePath } });
-      
-      // 将 base64 转换为 Uint8Array
       const binaryData = Uint8Array.from(atob(fileContent), c => c.charCodeAt(0));
-      
       await this.ffmpeg.writeFile(inputName, binaryData);
 
-      // ffmpeg args: 图片转视频 + 静音音频
+      let audioInputName: string | null = null;
+      if (useCustomAudio && audioPath) {
+        const audioBytes: string = await invoke('read_file_base64', { options: { path: audioPath } });
+        const ext = (audioPath.split(/[/\\]/).pop() || 'mp3').split('.').pop()?.toLowerCase() || 'mp3';
+        audioInputName = `input_audio.${ext}`;
+        await this.ffmpeg.writeFile(audioInputName, Uint8Array.from(atob(audioBytes), c => c.charCodeAt(0)));
+      }
+
+      // 视频：原图 + pad 补偶；-loop 1 -t 3
+      const videoInput = ['-loop', '1', '-t', '3', '-i', inputName];
+
+      // 音频：用户文件裁剪至 3 秒（atrim=0:3）、不足则静音补齐（apad=whole_dur=3）；否则静音
+      const audioInput: string[] = useCustomAudio && audioInputName
+        ? ['-i', audioInputName]
+        : ['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100'];
+
+      const hasFilter = useCustomAudio && audioInputName;
+      // 有自定义音频时： [1:a]atrim=0:3,apad=whole_dur=3[aout] ，并 -map 0:v -map [aout]
+      const filterComplex = hasFilter
+        ? ['-filter_complex', '[1:a]atrim=0:3,apad=whole_dur=3[aout]', '-map', '0:v', '-map', '[aout]']
+        : [];
+      const mapOrShortest = hasFilter ? [] : ['-shortest'];
+
       const args = [
-        '-loop', '1',
-        '-t', '5',                              // 视频时长 5 秒
-        '-i', inputName,                        // 输入图片
-        '-f', 'lavfi',
-        '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',  // 虚拟静音音频
-        '-vf', 'scale=-2:720:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2',
+        ...videoInput,
+        ...audioInput,
+        '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2',
         '-r', '1',
         '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '18',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',                          // AAC 音频编码
+        '-qp', '0',
+        '-pix_fmt', 'yuv444p',
+        '-preset', 'medium',
+        '-c:a', 'aac',
         '-b:a', '128k',
-        '-shortest',                            // 音频视频对齐
+        ...filterComplex,
+        ...mapOrShortest,
         outputName
       ];
 
       console.log('[FFmpegService] 执行 ffmpeg 命令:', args.join(' '));
-      
       await this.ffmpeg.exec(args);
 
       const data = await this.ffmpeg.readFile(outputName);
-      
       await this.ffmpeg.deleteFile(inputName);
+      if (audioInputName) await this.ffmpeg.deleteFile(audioInputName);
       await this.ffmpeg.deleteFile(outputName);
 
       const uint8Data = data as Uint8Array;
       console.log('[FFmpegService] 视频生成成功，大小:', uint8Data.length);
-      
       return uint8Data;
     } catch (error: any) {
       console.error('[FFmpegService] 视频转换失败:', error.message || error);

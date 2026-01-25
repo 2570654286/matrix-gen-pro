@@ -81,15 +81,18 @@ const MyCustomPlugin: ApiPlugin = {
 
 // --- Convert AIPlugin to ApiPlugin ---
 function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
-  return {
+  const raw = aiPlugin as unknown as Record<string, unknown>;
+  const apiPlugin: ApiPlugin & Record<string, unknown> = {
     id: aiPlugin.manifest.id,
     name: aiPlugin.manifest.name,
     description: aiPlugin.manifest.description,
 
     getSupportedModels: (mediaType: MediaType) => {
-      // AIPlugin is primarily for video generation
       if (mediaType === MediaType.VIDEO) {
         return ['sora_2_0', 'sora_2_0_turbo', 'veo_3_1-fast', 'gen-2', 'gen-3-alpha', 'kling-1.0'];
+      }
+      if (mediaType === MediaType.IMAGE) {
+        return ['dall-e-3', 'stable-diffusion-xl', 'midjourney-v6'];
       }
       return [];
     },
@@ -126,6 +129,11 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
       let taskId = taskInfo.taskId;
       let status = taskInfo.status;
 
+      // If taskId is null or invalid, throw error immediately
+      if (!taskId || taskId === 'null' || taskId === 'undefined') {
+        throw new Error('无法获取任务ID，请检查API响应');
+      }
+
       onProgress?.(10);
 
       // Step 4: Poll for completion
@@ -133,17 +141,24 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
       const pollInterval = 5000;
       let attempts = 0;
 
-      while (status !== 'completed' && status !== 'success' && attempts < maxRetries) {
+      while (status !== 'completed' && status !== 'success' && status !== 'failed' && status !== 'error' && attempts < maxRetries) {
         await new Promise(resolve => setTimeout(resolve, pollInterval));
         attempts++;
 
         const statusRequest = aiPlugin.createStatusRequest(taskId, payload.apiKey || '');
-        const statusResponse = await http.request<any>({
-          method: statusRequest.method as any,
-          url: statusRequest.url,
-          headers: statusRequest.headers,
-          body: statusRequest.body,
-        });
+        let statusResponse;
+        try {
+          statusResponse = await http.request<any>({
+            method: statusRequest.method as any,
+            url: statusRequest.url,
+            headers: statusRequest.headers,
+            body: statusRequest.body,
+          });
+        } catch (error) {
+          // If request fails, check if it's a task_not_exist error
+          console.error('[PluginSystem] Status check failed:', error);
+          throw new Error('任务不存在或查询失败');
+        }
 
         const statusInfo = aiPlugin.parseVideoUrl(statusResponse);
         status = statusInfo.status;
@@ -157,8 +172,15 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
         if (status === 'completed' || status === 'success') {
           return statusInfo.url || '';
         } else if (status === 'failed' || status === 'error') {
-          throw new Error('Video generation failed');
+          // Check if response has error message
+          const errorMsg = statusResponse?.message || statusResponse?.code || 'Video generation failed';
+          throw new Error(errorMsg === 'task_not_exist' ? '任务不存在' : errorMsg);
         }
+      }
+
+      // Check if we exited due to failed status
+      if (status === 'failed' || status === 'error') {
+        throw new Error('视频生成失败');
       }
 
       if (attempts >= maxRetries) {
@@ -169,6 +191,13 @@ function aiPluginToApiPlugin(aiPlugin: AIPlugin): ApiPlugin {
       throw new Error('Unexpected polling end');
     }
   };
+
+  // 透传角色管理方法，供 SoraCharacterService 使用（与视频 API 提供商一致）
+  if (typeof raw.createCharacter === 'function') apiPlugin.createCharacter = raw.createCharacter;
+  if (typeof raw.getCharacterList === 'function') apiPlugin.getCharacterList = raw.getCharacterList;
+  if (typeof raw.deleteCharacter === 'function') apiPlugin.deleteCharacter = raw.deleteCharacter;
+
+  return apiPlugin as ApiPlugin;
 }
 
 // --- Load External Plugins ---

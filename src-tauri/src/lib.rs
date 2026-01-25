@@ -123,7 +123,8 @@ pub fn run() {
             commands::check_generation_lock,
             commands::release_generation_lock,
             commands::execute_powershell_command,
-            commands::rename_video_file
+            commands::rename_video_file,
+            commands::cache_image
         ])
         .setup(|app| {
             // 在应用启动时清理临时文件

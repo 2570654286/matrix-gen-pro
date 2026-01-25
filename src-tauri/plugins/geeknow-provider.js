@@ -111,6 +111,16 @@ const plugin = {
   },
 
   parseVideoUrl: function(response) {
+    // Check for specific error codes (e.g., task_not_exist)
+    // Only check for known error codes to avoid false positives
+    if (response.code === 'task_not_exist' || response.code === 'task_not_found') {
+      return {
+        url: null,
+        status: 'failed',
+        progress: 0
+      };
+    }
+
     const status = response.status?.toLowerCase();
 
     // Check completion status

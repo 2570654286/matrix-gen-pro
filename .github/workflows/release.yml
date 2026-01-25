@@ -38,7 +38,5 @@ jobs:
         with:
           tagName: v__VERSION__ # 建议加上这行，强制让它使用 package.json 的版本号对应 Tag
           releaseName: 'MatrixGen Pro v__VERSION__'
-          body: 'See the assets to download this version and install.'
-          draft: false
           prerelease: false
           args: --verbose

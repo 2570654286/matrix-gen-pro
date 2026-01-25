@@ -16,13 +16,15 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 // 👇 1. 引入必要的 Tauri 插件
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { ask } from '@tauri-apps/plugin-dialog';
 import { clearAndReloadPlugins } from './services/pluginSystem';
 import { getCurrentBeijingDateString } from './utils/timeUtils';
 import { FileService } from './services/FileService';
 
 import ReactPlayer from 'react-player';
 import { LogMonitorPage } from './pages/LogMonitorPage';
+import { ToastContainer } from './components/Toast';
+import { toastService } from './services/toastService';
+import { useModalClickOutside } from './hooks/useModalClickOutside';
 
 // ... 你的其他 import 保持不变 ...
 
@@ -217,18 +219,20 @@ const SettingsModal = ({
   isClearingPlugins: boolean;
   handleClearPlugins: () => void;
 }) => {
-  const [activeTab, setActiveTab] = useState<'global' | 'image' | 'video' | 'llm'>('global');
+  const [activeTab, setActiveTab] = useState<'global' | 'image' | 'video' | 'llm' | 'character'>('global');
   const providers = PluginRegistry.getAll();
   const currentProvider = providers.find(p => p.id === settings.providerId) || PluginRegistry.get(settings.providerId);
   
   // Filter providers by capability
   const imageProviders = providers.filter(p => p.getSupportedModels(MediaType.IMAGE).length > 0);
   const videoProviders = providers.filter(p => p.getSupportedModels(MediaType.VIDEO).length > 0);
+  const characterProviders = providers.filter((p: any) => typeof p.createCharacter === 'function');
 
   // Check if using custom config for each type
   const imageUsesCustom = !!(settings.imageProviderId || settings.imageApiKey);
   const videoUsesCustom = !!(settings.videoProviderId || settings.videoApiKey);
   const llmUsesCustom = !!(settings.llmProviderId || settings.llmApiKey);
+  const characterUsesCustom = !!(settings.characterProviderId || settings.characterApiKey);
 
   // Auto-switch tab based on current media type when modal opens
   useEffect(() => {
@@ -241,11 +245,14 @@ const SettingsModal = ({
     }
   }, [isOpen, settings.mediaType]);
 
+  // 使用 hook 处理模态框点击外部关闭的逻辑
+  const settingsModalHandlers = useModalClickOutside(onClose);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
-      <div className="w-[90%] max-w-4xl h-[95%] bg-[#121212] border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden relative" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" {...settingsModalHandlers}>
+      <div data-modal-content className="w-[90%] max-w-4xl h-[95%] bg-[#121212] border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden relative transition-all duration-300 ease-out" onClick={(e) => e.stopPropagation()}>
         
         {/* 底部阻挡层 - 防止点击设置界面下方的元素 */}
         <div className="absolute bottom-0 left-0 right-0 h-8 bg-[#121212] -z-10"></div>
@@ -326,6 +333,17 @@ const SettingsModal = ({
           >
             <ChatIcon className="w-4 h-4" />
             大语言模型
+          </button>
+          <button
+            onClick={() => setActiveTab('character')}
+            className={`px-4 py-3 text-sm font-medium transition-all border-b-2 flex items-center gap-2 ${
+              activeTab === 'character'
+                ? 'text-primary border-primary'
+                : 'text-gray-400 border-transparent hover:text-white'
+            }`}
+          >
+            <UserIcon className="w-4 h-4" />
+            Sora角色创建
           </button>
         </div>
 
@@ -782,6 +800,100 @@ const SettingsModal = ({
               </div>
             </div>
           )}
+
+          {/* Sora角色创建 Tab */}
+          {activeTab === 'character' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white mb-1">Sora 角色创建</h3>
+                  <p className="text-xs text-gray-500">选择用于 Sora 角色上传（创建角色、列表、删除）的 API 供应商与密钥。未单独选择时，将使用视频生成所选的供应商与密钥（若该供应商支持角色管理）。</p>
+                </div>
+                {characterProviders.length > 0 && (
+                  <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={characterUsesCustom}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSettings({
+                            ...settings,
+                            characterProviderId: settings.characterProviderId || (characterProviders.some((p: any) => p.id === (settings.videoProviderId || settings.providerId)) ? (settings.videoProviderId || settings.providerId) : (characterProviders[0]?.id || '')),
+                            characterApiKey: settings.characterApiKey || settings.videoApiKey || settings.apiKey
+                          });
+                        } else {
+                          setSettings({
+                            ...settings,
+                            characterProviderId: undefined,
+                            characterApiKey: undefined
+                          });
+                        }
+                      }}
+                      className="w-4 h-4 rounded border-border bg-[#1a1a1a] text-primary focus:ring-primary cursor-pointer"
+                    />
+                    <span className="group-hover:text-white transition-colors">使用独立配置</span>
+                  </label>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                {characterProviders.length > 0 ? (
+                  characterUsesCustom ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-300 mb-2">API 供应商</label>
+                        <select
+                          value={
+                            settings.characterProviderId ||
+                            (characterProviders.some((p: any) => p.id === (settings.videoProviderId || settings.providerId))
+                              ? (settings.videoProviderId || settings.providerId)
+                              : '')
+                          }
+                          onChange={(e) => setSettings({ ...settings, characterProviderId: e.target.value || undefined })}
+                          className="w-full bg-[#1a1a1a] border border-border rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-primary transition-all"
+                        >
+                          {!characterProviders.some((p: any) => p.id === (settings.videoProviderId || settings.providerId)) && (
+                            <option value="">请选择（当前视频供应商不支持角色）</option>
+                          )}
+                          {characterProviders.map((p: any) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-gray-500 mt-1.5">
+                          {(() => {
+                            const eff = settings.characterProviderId || settings.videoProviderId || settings.providerId;
+                            const pl = characterProviders.find((p: any) => p.id === eff);
+                            return pl ? pl.description : '请在上方选择支持角色管理的供应商。';
+                          })()}
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-300 mb-2">API 密钥</label>
+                        <input
+                          type="password"
+                          value={settings.characterApiKey ?? settings.videoApiKey ?? settings.apiKey}
+                          onChange={(e) => setSettings({ ...settings, characterApiKey: e.target.value })}
+                          placeholder="留空则使用视频生成配置"
+                          className="w-full bg-[#1a1a1a] border border-border rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-primary transition-all"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="bg-[#1a1a1a]/30 border border-white/5 rounded-lg p-4 text-center">
+                      <p className="text-xs text-gray-500">当前使用视频生成配置</p>
+                      <p className="text-[10px] text-gray-600 mt-1">Provider: {settings.videoProviderId || settings.providerId}，使用视频的 API 密钥</p>
+                    </div>
+                  )
+                ) : (
+                  <div className="bg-[#1a1a1a]/30 border border-white/5 rounded-lg p-4 text-center">
+                    <p className="text-xs text-gray-500">当前无支持角色管理的 API 供应商</p>
+                    <p className="text-[10px] text-gray-600 mt-1">请确认已加载智创、GeekNow 等支持 Sora 角色接口的插件</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -791,6 +903,7 @@ const SettingsModal = ({
             {activeTab === 'image' && (imageUsesCustom ? '使用独立配置' : '继承全局配置')}
             {activeTab === 'video' && (videoUsesCustom ? '使用独立配置' : '继承全局配置')}
             {activeTab === 'llm' && (llmUsesCustom ? '使用独立配置' : '继承全局配置')}
+            {activeTab === 'character' && (characterUsesCustom ? '使用独立配置' : '继承视频生成配置')}
           </div>
           <div className="flex items-center gap-4">
             <VersionBadge />
@@ -929,8 +1042,21 @@ function App() {
   const [focusedJob, setFocusedJob] = useState<Job | null>(null);
   const [editingFileName, setEditingFileName] = useState<string>('');
 
+  // 使用 hook 处理模态框点击外部关闭的逻辑
+  const focusedJobModalHandlers = useModalClickOutside(() => setFocusedJob(null));
+
   // Update System State
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+
+  // Toast State
+  const [toasts, setToasts] = useState<import('./components/Toast').Toast[]>([]);
+
+  useEffect(() => {
+    const unsubscribe = toastService.subscribe((newToasts) => {
+      setToasts(newToasts);
+    });
+    return unsubscribe;
+  }, []);
 
   // Initialize editing file name when focused job changes
   useEffect(() => {
@@ -961,6 +1087,10 @@ function App() {
   const [promptPanelHeight, setPromptPanelHeight] = useState(300); // Default pixel height
   const isResizingRef = useRef(false);
   const resizeRafRef = useRef<number>(0);
+
+  // Window Resize State for Smooth Transitions
+  const [isWindowResizing, setIsWindowResizing] = useState(false);
+  const windowResizeTimeoutRef = useRef<number | null>(null);
 
   // Refs for smooth interactions
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1043,11 +1173,10 @@ function App() {
 
     setIsClearingPlugins(true);
     try {
-      await clearAndReloadPlugins();
-      // Show success message or toast
+      const plugins = await clearAndReloadPlugins();
+      setExternalPlugins(plugins || []);
     } catch (error) {
       console.error('Failed to clear and reload plugins:', error);
-      // Show error message or toast
     } finally {
       setIsClearingPlugins(false);
     }
@@ -1141,6 +1270,30 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current);
+    };
+  }, []);
+
+  // --- Window Resize Listener for Smooth Transitions ---
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setIsWindowResizing(true);
+      // Clear any existing timeout
+      if (windowResizeTimeoutRef.current !== null) {
+        clearTimeout(windowResizeTimeoutRef.current);
+      }
+      // Reset resizing state after transitions complete
+      windowResizeTimeoutRef.current = window.setTimeout(() => {
+        setIsWindowResizing(false);
+        windowResizeTimeoutRef.current = null;
+      }, 150); // Slightly longer than CSS transition duration
+    };
+
+    window.addEventListener('resize', handleWindowResize);
+    return () => {
+      window.removeEventListener('resize', handleWindowResize);
+      if (windowResizeTimeoutRef.current !== null) {
+        clearTimeout(windowResizeTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -1462,6 +1615,17 @@ function App() {
       return;
     }
 
+    // 获取原始文件名（不含扩展名）用于比较
+    const originalFileName = jobToRename.fileName || `file_${jobToRename.id}`;
+    const lastDotIndex = originalFileName.lastIndexOf('.');
+    const originalBaseName = lastDotIndex > 0 ? originalFileName.substring(0, lastDotIndex) : originalFileName;
+
+    // 如果新文件名和原始文件名相同，不需要重命名
+    if (sanitizedName === originalBaseName) {
+      console.log('[Rename] File name unchanged, skipping rename');
+      return;
+    }
+
     try {
 
       // Call backend to rename the file
@@ -1489,18 +1653,29 @@ function App() {
       console.log('[Rename] File renamed successfully:', newFullPath);
     } catch (error) {
       console.error('[Rename] Failed to rename file:', error);
-      // Fallback to just updating the display name if file rename fails
-      const extension = jobToRename.fileName?.includes('.') ? jobToRename.fileName.substring(jobToRename.fileName.lastIndexOf('.')) : '';
-      const newFileName = sanitizedName + extension;
-      setJobs(prev => prev.map(j => {
-        if (j.id === id) {
-          return { ...j, fileName: newFileName };
-        }
-        return j;
-      }));
-      if (focusedJob && focusedJob.id === id) {
-        setFocusedJob(prev => prev ? { ...prev, fileName: newFileName } : null);
+      
+      // 检查是否是文件名重复错误
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('重复') || errorMessage.includes('已存在')) {
+        // 显示文件名重复提示（使用 Toast）
+        toastService.warning(`文件名 "${sanitizedName}" 已存在，请换一个名字。`, 4000);
+        
+        // 恢复原始文件名（移除扩展名，因为 editingFileName 不包含扩展名）
+        const originalFileName = jobToRename.fileName || `file_${jobToRename.id}`;
+        const lastDotIndex = originalFileName.lastIndexOf('.');
+        const baseName = lastDotIndex > 0 ? originalFileName.substring(0, lastDotIndex) : originalFileName;
+        setEditingFileName(baseName);
+        return;
       }
+      
+      // 其他错误，显示通用错误提示（使用 Toast）
+      toastService.error(`无法重命名文件: ${errorMessage}`, 4000);
+      
+      // 恢复原始文件名（移除扩展名，因为 editingFileName 不包含扩展名）
+      const originalFileName = jobToRename.fileName || `file_${jobToRename.id}`;
+      const lastDotIndex = originalFileName.lastIndexOf('.');
+      const baseName = lastDotIndex > 0 ? originalFileName.substring(0, lastDotIndex) : originalFileName;
+      setEditingFileName(baseName);
     }
   };
 
@@ -1551,7 +1726,7 @@ function App() {
   const validPromptCount = currentPrompts.filter((p: PromptItem) => p.text.trim().length > 0).length;
 
   return (
-    <div className="flex h-screen w-full bg-background text-gray-200 font-sans selection:bg-primary/30">
+    <div className={`flex h-screen w-full bg-background text-gray-200 font-sans selection:bg-primary/30 ${isWindowResizing ? 'resizing' : ''}`}>
       
       <SettingsModal
         isOpen={showSettings}
@@ -1568,8 +1743,8 @@ function App() {
       <Sora2RolePanel
         isOpen={showSora2Role}
         onClose={() => setShowSora2Role(false)}
-        apiKey={settings.videoApiKey || settings.apiKey}
-        providerId={settings.videoProviderId || settings.providerId}
+        apiKey={(settings.characterProviderId || settings.characterApiKey) ? (settings.characterApiKey ?? settings.videoApiKey ?? settings.apiKey) : (settings.videoApiKey || settings.apiKey)}
+        providerId={settings.characterProviderId || settings.videoProviderId || settings.providerId}
         mediaType={settings.mediaType}
       />
 
@@ -1967,9 +2142,10 @@ function App() {
             {focusedJob && (
                 <div 
                     className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xl animate-in fade-in duration-300"
-                    onClick={() => setFocusedJob(null)}
+                    {...focusedJobModalHandlers}
                 >
                     <div 
+                        data-modal-content
                         className="w-[80%] h-[80%] bg-[#0a0a0a] rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex animate-slide-up"
                         onClick={(e) => e.stopPropagation()}
                     >
@@ -2094,6 +2270,19 @@ function App() {
 
         </div>
       </main>
+
+      {/* DEV MODE Indicator */}
+      {import.meta.env.DEV && (
+        <div className="fixed bottom-2 right-2 bg-red-600 text-white px-2 py-1 rounded-md text-xs font-bold z-[9999] opacity-80 pointer-events-none">
+          🛠️ DEV MODE
+        </div>
+      )}
+
+      {/* Toast Notifications */}
+      <ToastContainer 
+        toasts={toasts} 
+        onRemove={(id) => toastService.remove(id)} 
+      />
     </div>
   );
 }

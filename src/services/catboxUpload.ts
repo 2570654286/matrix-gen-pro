@@ -10,15 +10,21 @@ export interface CatboxUploadResponse {
 export const CatboxService = {
   // 上传文件到 Catbox
   upload: async (file: File): Promise<CatboxUploadResponse> => {
-    try {
-      const formData = new FormData();
-      formData.append('fileToUpload', file);
-      formData.append('reqtype', 'fileupload'); // 这是 catbox 的 API 参数
+    const formData = new FormData();
+    formData.append('fileToUpload', file);
+    formData.append('reqtype', 'fileupload'); // 这是 catbox 的 API 参数
 
+    // 创建带有超时的 AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5分钟超时
+
+    try {
       const response = await fetch('https://catbox.moe/user/api.php', {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       const responseText = await response.text();
 
@@ -35,6 +41,7 @@ export const CatboxService = {
         };
       }
     } catch (error) {
+      clearTimeout(timeoutId);
       return {
         success: false,
         error: error instanceof Error ? error.message : '网络错误'

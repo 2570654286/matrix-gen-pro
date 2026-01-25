@@ -66,8 +66,8 @@ pub struct UpdateManifest {
 pub async fn proxy_http_request(options: RequestOptions) -> Result<ApiResponse, String> {
     // 创建客户端，设置 8 分钟超时
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(480)) // 8 分钟超时
-        .connect_timeout(std::time::Duration::from_secs(60)) // 1 分钟连接超时
+        .timeout(std::time::Duration::from_secs(480)) // 8 分钟请求超时
+        .connect_timeout(std::time::Duration::from_secs(300)) // 5 分钟连接超时
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -337,8 +337,9 @@ pub async fn upload_file(options: UploadOptions) -> Result<UploadResponse, Strin
     };
 
     // 创建 HTTP 客户端_builder
-    let mut client_builder =
-        reqwest::Client::builder().timeout(std::time::Duration::from_secs(120));
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(480)) // 8 分钟请求超时
+        .connect_timeout(std::time::Duration::from_secs(300)); // 5 分钟连接超时
 
     // 配置代理
     if let Some(proxy_url) = &options.proxy_url {
@@ -786,60 +787,48 @@ pub async fn load_plugins_raw(app: tauri::AppHandle) -> Result<Vec<String>, Stri
     let exe_path = std::env::current_exe().map_err(|e| format!("无法获取可执行文件路径: {}", e))?;
     let exe_dir = exe_path.parent().ok_or("无法获取可执行文件所在目录")?;
 
-    // 插件目录路径 - 优先尝试从资源目录解析
-    let plugins_dir = match app.path().resolve("plugins/", tauri::path::BaseDirectory::Resource) {
+    // 插件目录路径：先按 Resource 或 fallback 得到初始路径
+    // exe_dir 在开发模式下为 …/src-tauri/target/debug，往上一级再上一级再上一级 = 项目根
+    let project_root = exe_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent());
+
+    let mut plugins_dir = match app.path().resolve("plugins/", tauri::path::BaseDirectory::Resource) {
         Ok(resource_path) => {
-            println!("[PluginLoader] 使用资源目录: {:?}", resource_path);
+            println!("[PluginLoader] Resource 解析到: {:?}", resource_path);
             resource_path
         }
         Err(e) => {
-            println!("[PluginLoader] 资源目录解析失败: {}, 尝试fallback逻辑", e);
-
-            // 检查是否为开发模式（通过检查目录结构）
-            // exe_dir 在开发模式下是 src-tauri/target/debug
-            let project_root = exe_dir
-                .parent() // src-tauri/target
-                .and_then(|p| p.parent()) // src-tauri
-                .and_then(|p| p.parent()); // project root
-
-            let is_dev_mode = project_root.map_or(false, |root| {
-                let has_src_tauri = root.join("src-tauri").exists();
-                let has_src = root.join("src").exists();
-                let has_plugins = root.join("plugins").exists();
-                println!("[PluginLoader] 检查开发模式: project_root={:?}, has_src_tauri={}, has_src={}, has_plugins={}", root, has_src_tauri, has_src, has_plugins);
-                has_src_tauri && has_src
+            println!("[PluginLoader] Resource 解析失败: {}, 使用 fallback", e);
+            let is_dev = project_root.map_or(false, |r| {
+                r.join("src-tauri").exists() && r.join("src").exists()
             });
-
-            if is_dev_mode && project_root.is_some() {
-                // 开发模式：优先检查项目根目录的 plugins 文件夹
-                let dev_plugins_dir = project_root.unwrap().join("plugins");
-                println!(
-                    "[PluginLoader] 开发模式检测到，使用项目根目录插件文件夹: {:?}",
-                    dev_plugins_dir
-                );
-
-                if dev_plugins_dir.exists() {
-                    dev_plugins_dir
+            if is_dev {
+                let root = project_root.unwrap();
+                let st = root.join("src-tauri").join("plugins");
+                if st.exists() {
+                    st
                 } else {
-                    println!(
-                        "[PluginLoader] 开发模式：项目根目录插件文件夹不存在: {:?}",
-                        dev_plugins_dir
-                    );
-                    // 回退到当前工作目录
                     std::env::current_dir()
                         .map_err(|e| format!("无法获取当前目录: {}", e))?
                         .join("plugins")
                 }
             } else {
-                // 非开发模式，使用可执行文件目录的 plugins 文件夹
-                println!(
-                    "[PluginLoader] 非开发模式，使用默认插件目录: {:?}",
-                    exe_dir.join("plugins")
-                );
                 exe_dir.join("plugins")
             }
         }
     };
+
+    // 开发模式覆盖：Resource 在 dev 下常指向 target/debug/plugins，该目录可能缺 zhichuang 等
+    // 若存在 项目根/src-tauri/plugins，则直接使用源码目录，确保加载到全部插件
+    if let Some(root) = project_root {
+        let src_tauri_plugins = root.join("src-tauri").join("plugins");
+        if src_tauri_plugins.exists() {
+            println!("[PluginLoader] 开发模式：使用源码 src-tauri/plugins（含 zhichuang 等）");
+            plugins_dir = src_tauri_plugins;
+        }
+    }
 
     println!("[PluginLoader] 插件目录路径: {}", plugins_dir.display());
 
@@ -1066,7 +1055,8 @@ pub async fn download_file(url: String, file_name: String) -> Result<String, Str
     println!("[Download] 开始下载到临时文件: {}", file_path_str);
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(480)) // 8 分钟请求超时
+        .connect_timeout(std::time::Duration::from_secs(300)) // 5 分钟连接超时
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -1162,6 +1152,79 @@ pub fn open_output_folder(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// 缓存远程图像到本地（用于绕过WebView跟踪预防）
+#[derive(Debug, Deserialize)]
+pub struct CacheImageOptions {
+    pub url: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CacheImageResponse {
+    pub success: bool,
+    pub local_path: Option<String>,
+    pub error: Option<String>,
+}
+
+#[command]
+pub async fn cache_image(options: CacheImageOptions) -> Result<CacheImageResponse, String> {
+    let CacheImageOptions { url, file_name } = options;
+
+    println!("[CacheImage] 开始缓存图像: {} -> {}", url, file_name);
+
+    let cache_dir = std::env::temp_dir().join("matrix-gen").join("images");
+
+    // 确保目录存在
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        println!("[CacheImage] 创建缓存目录失败: {}", e);
+        return Err(format!("无法创建缓存目录: {}", e));
+    }
+
+    let file_path = cache_dir.join(&file_name);
+    let file_path_str = file_path.to_string_lossy().to_string();
+
+    println!("[CacheImage] 目标路径: {}", file_path_str);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120)) // 2分钟超时足够下载图像
+        .connect_timeout(std::time::Duration::from_secs(60)) // 1分钟连接超时
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download image: {}", e))?;
+
+    if !response.status().is_success() {
+        return Ok(CacheImageResponse {
+            success: false,
+            local_path: None,
+            error: Some(format!("Download failed with status: {}", response.status())),
+        });
+    }
+
+    let content = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    std::fs::write(&file_path, &content).map_err(|e| format!("Failed to write image file: {}", e))?;
+
+    println!(
+        "[CacheImage] 图像缓存成功: {} ({} bytes)",
+        file_path_str,
+        content.len()
+    );
+
+    Ok(CacheImageResponse {
+        success: true,
+        local_path: Some(file_path_str),
+        error: None,
+    })
+}
+
 // 重命名视频文件
 #[command]
 pub fn rename_video_file(old_path: String, new_base_name: String) -> Result<String, String> {
@@ -1190,6 +1253,19 @@ pub fn rename_video_file(old_path: String, new_base_name: String) -> Result<Stri
 
     // 构造新路径
     let new_full_path = parent_dir.join(new_file_name);
+
+    // 检查新文件名是否已存在（排除当前文件本身）
+    if new_full_path.exists() {
+        // 规范化路径进行比较，确保正确判断是否为同一文件
+        let old_path_canonical = old_path_obj.canonicalize().unwrap_or_else(|_| old_path_obj.to_path_buf());
+        let new_path_canonical = new_full_path.canonicalize().unwrap_or_else(|_| new_full_path.clone());
+        
+        // 如果规范化后的路径不同，说明是另一个文件，报错
+        if old_path_canonical != new_path_canonical {
+            println!("[RenameVideo] 文件名已存在: {}", new_full_path.to_string_lossy());
+            return Err(format!("文件名重复，请换一个名字"));
+        }
+    }
 
     // 执行重命名
     std::fs::rename(&old_path, &new_full_path)

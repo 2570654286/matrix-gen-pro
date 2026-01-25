@@ -69,3 +69,55 @@ body {
 .animate-pulse-slow {
   animation: pulse-slow 2s ease-in-out infinite;
 }
+
+/* Window Resize Smooth Transitions */
+.resizing * {
+  transition: all 0.3s ease-out !important;
+}
+
+/* Modal Resize Optimizations */
+.modal-resizing {
+  will-change: transform !important;
+  backface-visibility: hidden !important;
+  perspective: 1000px !important;
+}
+
+.modal-resizing * {
+  transition: transform 0.3s ease-out, opacity 0.3s ease-out !important;
+  backface-visibility: hidden !important;
+}
+
+/* Role Card Resize Optimizations */
+.role-card-resizing {
+  will-change: transform !important;
+  transform: translateZ(0) !important; /* Force hardware acceleration */
+}
+
+/* Toast Animations */
+@keyframes slideInRight {
+  from {
+    transform: translateX(calc(100% + 1rem));
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes shrink {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.animate-in {
+  animation-fill-mode: both;
+}
+
+.slide-in-from-right-full {
+  animation: slideInRight 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}

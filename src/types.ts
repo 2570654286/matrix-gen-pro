@@ -47,6 +47,10 @@ export interface AppSettings {
   imageApiKey?: string;
   videoProviderId?: string;
   videoApiKey?: string;
+  /** Sora 角色上传（创建/列表/删除）使用的 API 供应商，不设则继承视频生成 */
+  characterProviderId?: string;
+  /** Sora 角色接口使用的独立 API 密钥，不设则继承视频生成；与 characterProviderId 任一存在即视为使用独立配置 */
+  characterApiKey?: string;
 
   // Generation Params
   aspectRatio: string;

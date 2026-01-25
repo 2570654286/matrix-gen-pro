@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { XIcon, VideoIcon, UploadIcon, CheckIcon, ImageIcon, PlusIcon } from './Icons';
+import React, { useState, useEffect, useRef } from 'react';
+import { XIcon, VideoIcon, UploadIcon, CheckIcon, ImageIcon, PlusIcon, MusicIcon } from './Icons';
 import { SoraCharacterService } from '../services/soraCharacter';
 import { soundManager } from '../utils/soundManager';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -7,6 +7,7 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import ffmpegService from '../services/ffmpegService';
 import { StorageService } from '../services/StorageService';
 import { MediaType } from '../types';
+import { useModalClickOutside } from '../hooks/useModalClickOutside';
 
 interface Character {
   id: string;
@@ -19,6 +20,7 @@ interface Character {
   local_name?: string;
   video_thumbnail_url?: string;
   original_image_url?: string;
+  cachedAssetUrl?: string; // 缓存的asset URL，用于绕过tracking prevention
 }
 
 // 角色创建项类型
@@ -27,6 +29,10 @@ interface RoleCreationItem {
   prompt: string;
   imageUrl: string | null;
   imagePath: string | null;
+  /** 视频声音：用户上传的音频文件路径，裁剪至 3 秒后混入合成视频 */
+  audioPath: string | null;
+  /** 仅用于展示的音频文件名 */
+  audioFileName: string | null;
   status: 'idle' | 'generating' | 'uploading' | 'creating' | 'completed' | 'error';
   progressMessage: string;
   roleName?: string;
@@ -58,6 +64,14 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
   const [characters, setCharacters] = useState<Character[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
+
+  // 使用 hook 处理模态框点击外部关闭的逻辑
+  const characterModalHandlers = useModalClickOutside(() => setSelectedCharacter(null));
+
+  // Resize optimization states
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // 保存图片到应用数据目录并返回相对路径
   const saveImageToAppData = async (sourcePath: string, characterId: string): Promise<string> => {
@@ -96,18 +110,68 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
     }
   };
 
+  // 缓存远程图像以绕过WebView的tracking prevention
+  const cacheRemoteImage = async (imageUrl: string, characterId: string): Promise<string | null> => {
+    if (!imageUrl.startsWith('http')) {
+      // 非远程URL，直接返回原URL
+      return imageUrl;
+    }
+
+    try {
+      console.log('[Sora2RolePanel] 开始缓存远程图像:', imageUrl);
+
+      // 生成缓存文件名
+      const urlHash = btoa(imageUrl).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
+      const fileName = `cached_${characterId}_${urlHash}.jpg`;
+
+      // 调用后端缓存命令
+      const result: { success: boolean; local_path?: string; error?: string } = await invoke('cache_image', {
+        options: {
+          url: imageUrl,
+          file_name: fileName
+        }
+      });
+
+      if (result.success && result.local_path) {
+        console.log('[Sora2RolePanel] 图像缓存成功:', result.local_path);
+        return result.local_path;
+      } else {
+        console.warn('[Sora2RolePanel] 图像缓存失败:', result.error);
+        return null;
+      }
+    } catch (error) {
+      console.error('[Sora2RolePanel] 缓存图像异常:', error);
+      return null;
+    }
+  };
+
   // 从本地加载角色列表
-  const loadCharacters = () => {
+  const loadCharacters = async () => {
     const localCharacters = JSON.parse(localStorage.getItem('local_created_characters') || '[]');
     const savedNames = JSON.parse(localStorage.getItem('sora_character_names') || '{}');
 
-    const charactersWithNames = localCharacters.map((char: any) => ({
-      ...char,
-      local_name: savedNames[char.id] || char.local_name || char.username
-    }));
+    // 为角色添加本地名称，并缓存远程图像
+    const charactersWithNamesAndCache = await Promise.all(
+      localCharacters.map(async (char: any) => {
+        const characterWithName = {
+          ...char,
+          local_name: savedNames[char.id] || char.local_name || char.username
+        };
 
-    setCharacters(charactersWithNames);
-    console.log('[Sora2RolePanel] 从本地加载角色:', charactersWithNames.length);
+        // 如果有远程profile图片，尝试缓存它
+        if (char.profile_picture_url && char.profile_picture_url.startsWith('http')) {
+          const cachedPath = await cacheRemoteImage(char.profile_picture_url, char.id);
+          if (cachedPath) {
+            characterWithName.cachedAssetUrl = convertFileSrc(cachedPath);
+          }
+        }
+
+        return characterWithName;
+      })
+    );
+
+    setCharacters(charactersWithNamesAndCache);
+    console.log('[Sora2RolePanel] 从本地加载角色:', charactersWithNamesAndCache.length);
   };
 
   useEffect(() => {
@@ -119,6 +183,32 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       }
     }
   }, [isOpen, activeTab]);
+
+  // Window resize optimization for smooth modal transitions
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleResize = () => {
+      setIsResizing(true);
+      // Clear any existing timeout
+      if (resizeTimeoutRef.current !== null) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+      // Reset resizing state after transitions complete
+      resizeTimeoutRef.current = setTimeout(() => {
+        setIsResizing(false);
+        resizeTimeoutRef.current = null;
+      }, 400);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (resizeTimeoutRef.current !== null) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+    };
+  }, [isOpen]);
 
   // 并发处理，无需队列监听
 
@@ -146,6 +236,8 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       prompt: '',
       imageUrl: null,
       imagePath: null,
+      audioPath: null,
+      audioFileName: null,
       status: 'idle',
       progressMessage: '',
       roleName: ''
@@ -194,6 +286,31 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
     }
   };
 
+  // 处理视频声音上传（裁剪至 3 秒后混入合成视频）
+  const handleAudioUpload = async (itemId: string) => {
+    try {
+      const selected = await open({
+        title: '选择视频声音',
+        multiple: false,
+        filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'] }]
+      });
+
+      if (selected && typeof selected === 'string') {
+        const name = selected.split(/[/\\]/).pop() || 'audio';
+        updateRoleItem(itemId, { audioPath: selected, audioFileName: name });
+        showMessage('success', `已选声音，将裁剪至 3 秒: ${name}`);
+      }
+    } catch (error) {
+      console.error('选择声音失败:', error);
+      showMessage('error', '无法打开文件选择器');
+    }
+  };
+
+  // 清除已选视频声音
+  const clearAudio = (itemId: string) => {
+    updateRoleItem(itemId, { audioPath: null, audioFileName: null });
+  };
+
   // 处理生图（TODO：集成生图API）
   const handleGenerateImage = async (itemId: string, prompt: string) => {
     if (!prompt.trim()) {
@@ -222,9 +339,9 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
   // 处理视频转换和后续流程
   const processVideoConversionAndUpload = async (item: RoleCreationItem) => {
     try {
-      // 步骤 1: 图片转视频
+      // 步骤 1: 图片转视频（若已选声音则裁剪至 3 秒后混入）
       updateRoleItem(item.id, { progressMessage: '正在转换视频...' });
-      const videoData = await ffmpegService.imageToVideo(item.imagePath!);
+      const videoData = await ffmpegService.imageToVideo(item.imagePath!, item.audioPath ?? undefined);
 
       // 步骤 2: 上传到 Supabase Storage
       updateRoleItem(item.id, { progressMessage: '正在上传视频...' });
@@ -254,14 +371,17 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
         characterData = response;
       } else {
         let errorMsg = '创建失败';
-        if (response.message) {
+        const err = response?.error;
+        if (typeof err?.message === 'string') {
+          errorMsg = '创建失败: ' + err.message;
+        } else if (response?.message) {
           try {
             const nestedMsg = JSON.parse(response.message);
             errorMsg += nestedMsg.message ? `: ${nestedMsg.message}` : `: ${response.message}`;
           } catch {
             errorMsg += `: ${response.message}`;
           }
-        } else if (response.msg) {
+        } else if (response?.msg) {
           errorMsg += `: ${response.msg}`;
         }
         throw new Error(errorMsg);
@@ -342,8 +462,14 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
         throw new Error('API响应中缺少角色信息');
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '未知错误';
-      console.error(`[Sora2RolePanel] 创建失败:`, errorMessage);
+      const raw = typeof error === 'string' ? error : (error instanceof Error ? error.message : String(error));
+      const errorMessage = (() => {
+        if (/connection closed|connection reset|timed out|timeout|ECONNRESET|ETIMEDOUT/i.test(raw)) {
+          return '接口连接超时或中途断开。对方需先拉取并处理您的视频，若视频较大或网络较慢易超时。建议：稍后重试，或换用较小尺寸的图片以减小合成视频体积。';
+        }
+        return raw || '未知错误';
+      })();
+      console.error(`[Sora2RolePanel] 创建失败:`, raw);
       updateRoleItem(item.id, { status: 'error', progressMessage: errorMessage });
       showMessage('error', `创建失败: ${errorMessage}`);
     } finally {
@@ -441,7 +567,8 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-[95%] max-w-6xl h-[90%] bg-[#121212] border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden"
+        ref={containerRef}
+        className={`w-[95%] max-w-6xl h-[90%] bg-[#121212] border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ease-out ${isResizing ? 'modal-resizing' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-[#0a0a0a] shrink-0">
@@ -541,9 +668,9 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 transition-all duration-300 ease-out">
                   {roleCreationItems.map((item) => (
-                    <div key={item.id} className="bg-gradient-to-br from-[#1e1e1e] to-[#2a2a2a] border border-white/10 rounded-2xl overflow-hidden shadow-lg">
+                    <div key={item.id} className={`bg-gradient-to-br from-[#1e1e1e] to-[#2a2a2a] border border-white/10 rounded-2xl overflow-hidden shadow-lg max-w-md w-full transition-transform duration-300 ease-out ${isResizing ? 'role-card-resizing' : ''}`}>
                       {/* 头部 */}
                       <div className="flex items-center justify-between p-4 border-b border-white/5">
                         <div className="flex items-center gap-3">
@@ -639,6 +766,42 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
                                   </div>
                                 )}
                               </div>
+
+                              {/* 视频声音：可选，裁剪至 3 秒后混入合成视频 */}
+                              <div className="mt-3">
+                                <label className="block text-xs font-medium text-gray-300 mb-1">
+                                  视频声音（可选）
+                                </label>
+                                {item.audioPath ? (
+                                  <div className="flex items-center gap-2 bg-[#1a1a1a] border border-white/10 rounded-lg px-3 py-2">
+                                    <MusicIcon className="w-4 h-4 text-primary shrink-0" />
+                                    <span className="text-xs text-gray-300 truncate flex-1" title={item.audioFileName || ''}>
+                                      {item.audioFileName || '已选'}
+                                    </span>
+                                    <span className="text-[10px] text-gray-500 shrink-0">裁剪至 3 秒</span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); clearAudio(item.id); }}
+                                      disabled={item.status !== 'idle'}
+                                      className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                                      title="移除声音"
+                                    >
+                                      <XIcon className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAudioUpload(item.id)}
+                                    disabled={item.status !== 'idle'}
+                                    className="w-full flex items-center gap-2 px-3 py-2 bg-[#1a1a1a] border border-dashed border-gray-600 hover:border-primary/50 rounded-lg text-xs text-gray-500 hover:text-gray-300 transition-all disabled:opacity-50"
+                                  >
+                                    <MusicIcon className="w-4 h-4 shrink-0" />
+                                    <span>添加声音</span>
+                                    <span className="text-[10px] opacity-75">MP3/WAV/M4A，裁剪至 3 秒</span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -718,14 +881,20 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
                   <p className="text-xs text-gray-600 mt-1">在"创建角色"选项卡中创建第一个角色</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-6 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 transition-all duration-300 ease-out">
                   {characters.map((char) => (
                     <div
                       key={char.id}
                       onClick={() => setSelectedCharacter(char)}
-                      className="group relative aspect-square rounded-xl overflow-hidden bg-[#1a1a1a] border border-white/5 cursor-pointer transition-all duration-300 hover:scale-105 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10"
+                      className={`group relative w-full max-w-32 aspect-square rounded-xl overflow-hidden bg-[#1a1a1a] border border-white/5 cursor-pointer transition-all duration-300 hover:scale-105 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 ${isResizing ? 'role-card-resizing' : ''}`}
                     >
-                      {char.original_image_url ? (
+                      {char.cachedAssetUrl ? (
+                        <img
+                          src={char.cachedAssetUrl}
+                          alt={char.username}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : char.original_image_url ? (
                         <img
                           src={getImageUrl(char.original_image_url)}
                           alt={char.username}
@@ -786,9 +955,10 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
           {selectedCharacter && (
             <div
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm animate-in fade-in duration-200"
-              onClick={() => setSelectedCharacter(null)}
+              {...characterModalHandlers}
             >
               <div
+                data-modal-content
                 className="relative max-w-4xl max-h-[80vh] animate-in zoom-in-95 duration-200"
                 onClick={(e) => e.stopPropagation()}
               >
@@ -799,7 +969,13 @@ export const Sora2RolePanel: React.FC<Sora2RolePanelProps> = ({
                   <XIcon className="w-6 h-6" />
                 </button>
 
-                {selectedCharacter.original_image_url ? (
+                {selectedCharacter.cachedAssetUrl ? (
+                  <img
+                    src={selectedCharacter.cachedAssetUrl}
+                    alt={selectedCharacter.username}
+                    className="max-w-full max-h-[70vh] rounded-lg object-contain"
+                  />
+                ) : selectedCharacter.original_image_url ? (
                   <img
                     src={getImageUrl(selectedCharacter.original_image_url)}
                     alt={selectedCharacter.username}

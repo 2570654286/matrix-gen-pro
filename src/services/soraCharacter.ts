@@ -86,23 +86,10 @@ const getCharacterProvider = (providerId: string) => {
     return { type: 'config' as const, provider: config };
   }
 
-  // 如果都没有，尝试回退到支持角色管理的默认提供商
-  console.warn(`Provider ${providerId} does not support character management, falling back to geeknow-provider`);
-
-  // 首先尝试geeknow-provider的插件
-  const fallbackPlugin = PluginRegistry.get('geeknow-provider');
-  if (pluginSupportsCharacterManagement(fallbackPlugin)) {
-    return { type: 'plugin' as const, provider: fallbackPlugin };
-  }
-
-  // 然后尝试geeknow-provider的硬编码配置
-  const fallbackConfig = PROVIDER_CONFIGS['geeknow-provider'];
-  if (fallbackConfig) {
-    return { type: 'config' as const, provider: fallbackConfig };
-  }
-
-  // 如果实在找不到，抛出错误
-  throw new Error(`No character management provider available. Please ensure geeknow-provider plugin is loaded.`);
+  // 当前选中的视频提供商不支持角色管理，不再回退到 geeknow（避免用智创等密钥调 GeekNow 导致 401）
+  const p = PluginRegistry.get(providerId);
+  const providerName = (p && typeof (p as any).name === 'string') ? (p as any).name : providerId;
+  throw new Error(`当前选中的视频提供商（${providerName}）不支持角色管理。请切换到支持角色功能的提供商（如 GeekNow）后再试。`);
 };
 
 // Sora Character API 服务
